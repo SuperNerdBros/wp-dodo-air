@@ -74,7 +74,7 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 	}
 
 	private function is_dev_mode() {
-		return file_exists( SUPER_NERD_BROS_DODO_AIR_PATH . 'admin/hot' ) || file_exists( SUPER_NERD_BROS_DODO_AIR_PATH . 'public/hot' );
+		return ( defined( 'WP_ENV' ) && WP_ENV === 'development' ) || ( defined( 'WP_DEBUG' ) && WP_DEBUG );
 	}
 
 	private function render_dodo_air_shell( $app_base ) {
