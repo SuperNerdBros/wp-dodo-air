@@ -74,6 +74,18 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 
+			register_rest_route( 'dodo-air/v1', '/flights/reroll-number', array(
+				'methods'  => 'POST',
+				'callback' => array( $this, 'reroll_flight_number' ),
+				'permission_callback' => '__return_true',
+			) );
+
+			register_rest_route( 'dodo-air/v1', '/profiles/(?P<id>[a-zA-Z0-9_-]+)/rate', array(
+				'methods'  => 'POST',
+				'callback' => array( $this, 'rate_profile' ),
+				'permission_callback' => '__return_true',
+			) );
+
 			register_rest_route( 'dodo-air/v1', '/flights/(?P<id>[a-zA-Z0-9_-]+)/status', array(
 				'methods'  => 'POST',
 				'callback' => array( $this, 'update_flight_status' ),
@@ -171,7 +183,50 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		
 		if ( $user_id ) {
 			$user_schedules = get_user_meta( $user_id, '_dodo_air_schedules', true ) ?: array();
-			$user_passport = get_user_meta( $user_id, '_dodo_air_passport', true ) ?: null;
+			$user_passport = get_user_meta( $user_id, '_dodo_air_passport', true );
+			
+			if ( ! is_array( $user_passport ) ) {
+				$user_passport = array();
+			}
+
+			// Piggyback on the xophz-compass-xp system
+			$user_passport['xp'] = (int) get_user_meta( $user_id, '_xp_total_xp', true );
+			$user_passport['miles'] = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+		}
+		
+		$user_counts = count_users();
+		$total_users = $user_counts['total_users'];
+		
+		global $wpdb;
+		$online_users = (int) $wpdb->get_var("SELECT COUNT(DISTINCT user_id) FROM {$wpdb->usermeta} WHERE meta_key = 'session_tokens'");
+		
+		$views = (int) get_option( 'dodo_air_views', 0 );
+		$visitors = get_option( 'dodo_air_visitor_ids', array() );
+		if ( ! is_array( $visitors ) ) {
+			$visitors = array();
+		}
+		
+		$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+		if ( $alltime_pilots === 0 ) {
+			$flights = get_option( 'dodo_air_flights', array() );
+			$dreams = get_option( 'dodo_air_dreams', array() );
+			$alltime_pilots = count( $flights ) + count( $dreams );
+			update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
+		}
+		
+		$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+		if ( $alltime_passengers === 0 ) {
+			$flights = get_option( 'dodo_air_flights', array() );
+			$dreams = get_option( 'dodo_air_dreams', array() );
+			$cnt = 0;
+			foreach ( $flights as $f ) {
+				$cnt += count( $f['passengers'] ?? array() );
+			}
+			foreach ( $dreams as $d ) {
+				$cnt += count( $d['passengers'] ?? array() );
+			}
+			$alltime_passengers = $cnt;
+			update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
 		}
 		
 		return new WP_REST_Response( array(
@@ -182,6 +237,14 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			'profiles' => $this->get_data( 'profiles' ),
 			'mySchedules' => $user_schedules,
 			'myPassport' => $user_passport,
+			'totalIslanders' => $total_users,
+			'onlineIslanders' => $online_users,
+			'analytics' => array(
+				'views'    => $views,
+				'visitors' => count( $visitors ),
+				'alltimePilots' => $alltime_pilots,
+				'alltimePassengers' => $alltime_passengers,
+			),
 		), 200 );
 	}
 
@@ -226,18 +289,30 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
+	private function generate_flight_number() {
+		$counter = (int) get_option( 'dodo_air_flight_counter', 1 );
+		update_option( 'dodo_air_flight_counter', $counter + 1 );
+		$base36 = strtoupper( base_convert( $counter, 10, 36 ) );
+		return str_pad( $base36, 4, '0', STR_PAD_LEFT );
+	}
+
 	public function save_profile( $request ) {
 		$user_id = get_current_user_id();
 		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
 		
 		$params = $request->get_json_params();
+
+		if ( empty( $params['flightNumber'] ) ) {
+			$params['flightNumber'] = $this->generate_flight_number();
+		}
+
 		update_user_meta( $user_id, '_dodo_air_passport', $params );
 		
 		$profiles = $this->get_data( 'profiles' );
 		$profiles[ $params['friendCode'] ] = $params;
 		$this->update_data( 'profiles', $profiles );
 		
-		return new WP_REST_Response( array( 'success' => true ), 200 );
+		return new WP_REST_Response( array( 'success' => true, 'passport' => $params ), 200 );
 	}
 
 	public function add_request( $request ) {
@@ -271,18 +346,31 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$flights = $this->get_data( 'flights' );
 		
+		$flightId = isset($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
+		$milesCost = isset($params['milesCost']) ? (int) $params['milesCost'] : 0;
+
 		$newFlight = array_merge( $params, array(
-			'id' => 'DAL-' . rand( 1000, 9999 ),
+			'id' => $flightId,
 			'status' => 'Scheduled',
 			'passengers' => array(),
 			'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+			'milesCost' => $milesCost
 		) );
 		
 		array_unshift( $flights, $newFlight );
 		$this->update_data( 'flights', $flights );
 		
+		$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+		$alltime_pilots++;
+		update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
+		
 		$this->internal_add_chatter( 'Orville [AI]', 'Attention! New flight ' . $newFlight['id'] . ' to ' . $newFlight['islandName'] . ' is now accepting passengers at Gate ' . $newFlight['gate'] . '.' );
 		
+		$user_id = get_current_user_id();
+		if ( $user_id ) {
+			do_action( 'xp_gamification_action', $user_id, 'dal_hosted_flight' );
+		}
+
 		return new WP_REST_Response( $newFlight, 200 );
 	}
 
@@ -310,10 +398,37 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	public function board_flight( $request ) {
 		$id = $request->get_param( 'id' );
 		$params = $request->get_json_params();
+		$user_id = get_current_user_id();
 		
 		$flights = $this->get_data( 'flights' );
 		foreach ( $flights as &$f ) {
 			if ( $f['id'] === $id ) {
+				$milesCost = isset($f['milesCost']) ? (int) $f['milesCost'] : 0;
+				
+				if ($milesCost > 0 && $user_id) {
+					$passenger_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+					if ( $passenger_miles < $milesCost ) {
+						return new WP_Error( 'not_enough_miles', 'Not enough miles to board this flight.', array( 'status' => 400 ) );
+					}
+					update_user_meta( $user_id, '_xp_total_gp', $passenger_miles - $milesCost );
+					
+					$host_friendCode = isset($f['hostFriendCode']) ? $f['hostFriendCode'] : null;
+					if ( $host_friendCode ) {
+						$users = get_users(array(
+							'meta_key' => '_dodo_air_passport',
+							'meta_compare' => 'EXISTS'
+						));
+						foreach( $users as $u ) {
+							$p = get_user_meta( $u->ID, '_dodo_air_passport', true );
+							if ( isset($p['friendCode']) && $p['friendCode'] === $host_friendCode ) {
+								$host_miles = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
+								update_user_meta( $u->ID, '_xp_total_gp', $host_miles + $milesCost );
+								break;
+							}
+						}
+					}
+				}
+
 				if ( ! isset( $f['passengers'] ) ) {
 					$f['passengers'] = array();
 				}
@@ -321,7 +436,16 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					'id' => 'p-' . time(),
 					'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
 				) );
+				
+				$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+				$alltime_passengers++;
+				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
+				
 				$this->internal_add_chatter( 'Orville [AI]', $params['name'] . ' just boarded Flight ' . $id . ' to ' . $f['islandName'] . '!' );
+				
+				if ( $user_id ) {
+					do_action( 'xp_gamification_action', $user_id, 'dal_boarded_flight' );
+				}
 				break;
 			}
 		}
@@ -373,6 +497,10 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		array_unshift( $dreams, $newDream );
 		$this->update_data( 'dreams', $dreams );
 		
+		$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+		$alltime_pilots++;
+		update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
+		
 		$this->internal_add_chatter( 'Luna [AI]', 'Ah, a new dream has formed... ' . $newDream['islandName'] . ' is now accessible for dreamers.' );
 		
 		return new WP_REST_Response( $newDream, 200 );
@@ -413,6 +541,11 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					'id' => 'd-' . time(),
 					'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
 				) );
+				
+				$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+				$alltime_passengers++;
+				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
+				
 				$this->internal_add_chatter( 'Luna [AI]', $params['name'] . ' has drifted into the dream of ' . $d['islandName'] . '...' );
 				break;
 			}
@@ -453,6 +586,85 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	public function add_chatter( $request ) {
 		$params = $request->get_json_params();
 		$this->internal_add_chatter( $params['sender'], $params['text'], strpos( $params['sender'], 'AI' ) !== false ? 'orville' : 'user' );
+		return new WP_REST_Response( array( 'success' => true ), 200 );
+	}
+
+	public function reroll_flight_number( $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
+		
+		$miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+		if ( $miles < 500 ) {
+			return new WP_Error( 'not_enough_miles', 'Need 500 miles to re-roll flight number.', array( 'status' => 400 ) );
+		}
+
+		update_user_meta( $user_id, '_xp_total_gp', $miles - 500 );
+		
+		$passport = get_user_meta( $user_id, '_dodo_air_passport', true );
+		$new_number = $this->generate_flight_number();
+		$passport['flightNumber'] = $new_number;
+		update_user_meta( $user_id, '_dodo_air_passport', $passport );
+		
+		$profiles = $this->get_data( 'profiles' );
+		if ( isset( $passport['friendCode'] ) ) {
+			$profiles[ $passport['friendCode'] ] = $passport;
+			$this->update_data( 'profiles', $profiles );
+		}
+		
+		return new WP_REST_Response( array( 'success' => true, 'flightNumber' => $new_number, 'miles' => $miles - 500 ), 200 );
+	}
+
+	public function rate_profile( $request ) {
+		$target_friendCode = $request->get_param( 'id' );
+		$params = $request->get_json_params();
+		$ratingType = $params['ratingType']; // 'apple' or 'turnip'
+		
+		$user_id = get_current_user_id();
+		
+		$profiles = $this->get_data( 'profiles' );
+		if ( isset( $profiles[$target_friendCode] ) ) {
+			$p = $profiles[$target_friendCode];
+			if ( $ratingType === 'apple' ) {
+				$p['goodApples'] = isset($p['goodApples']) ? $p['goodApples'] + 1 : 1;
+			} else {
+				$p['rottenTurnips'] = isset($p['rottenTurnips']) ? $p['rottenTurnips'] + 1 : 1;
+			}
+			$profiles[$target_friendCode] = $p;
+			$this->update_data('profiles', $profiles);
+			
+			$host_user_id = null;
+			$users = get_users(array(
+				'meta_key' => '_dodo_air_passport',
+				'meta_compare' => 'EXISTS'
+			));
+			foreach( $users as $u ) {
+				$pass = get_user_meta( $u->ID, '_dodo_air_passport', true );
+				if ( isset( $pass['friendCode'] ) && $pass['friendCode'] === $target_friendCode ) {
+					$host_user_id = $u->ID;
+					
+					// Base 100 miles. Apple = 2x, Turnip = 0.5x
+					$reward = $ratingType === 'apple' ? 200 : 50;
+					$host_miles = (int) get_user_meta( $host_user_id, '_xp_total_gp', true );
+					update_user_meta( $host_user_id, '_xp_total_gp', $host_miles + $reward );
+					
+					do_action( 'xp_gamification_action', $host_user_id, 'dal_flight_rated_' . $ratingType );
+					break;
+				}
+			}
+		}
+		
+		// Give miles to rater
+		if ( $user_id ) {
+			$comment_len = strlen( trim( $params['comment'] ?? '' ) );
+			$extra = min( 25, $comment_len );
+			$rater_reward = 50 + $extra;
+			
+			$rater_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+			update_user_meta( $user_id, '_xp_total_gp', $rater_miles + $rater_reward );
+			
+			do_action( 'xp_gamification_action', $user_id, 'dal_gave_rating' );
+		}
+
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -590,6 +802,8 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		return new WP_REST_Response( array(
 			'views'    => $views,
 			'visitors' => count( $visitors ),
+			'alltimePilots' => (int) get_option( 'dodo_air_alltime_pilots', 0 ),
+			'alltimePassengers' => (int) get_option( 'dodo_air_alltime_passengers', 0 ),
 		), 200 );
 	}
 }
