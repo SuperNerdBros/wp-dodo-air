@@ -178,6 +178,17 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 		} );
+
+		// Bypass nonce checks for auth endpoints so stale cookies don't block login
+		add_filter( 'rest_cookie_check_errors', function( $error ) {
+			if ( ! empty( $error ) ) {
+				$uri = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : '';
+				if ( strpos( $uri, '/wp-json/dodo-air/v1/auth/' ) !== false ) {
+					return null;
+				}
+			}
+			return $error;
+		} );
 	}
 
 	private function get_data( $key ) {
