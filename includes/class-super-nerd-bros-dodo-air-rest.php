@@ -844,10 +844,19 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			return new WP_Error( 'invalid_email', 'Invalid email address', array( 'status' => 400 ) );
 		}
 
+		$villager_name = sanitize_text_field( $params['villagerName'] ?? '' );
+		$island_name = sanitize_text_field( $params['islandName'] ?? '' );
+
 		$user = get_user_by( 'email', $email );
 		if ( ! $user ) {
 			// Auto-create user
 			$username = sanitize_user( current( explode( '@', $email ) ) );
+			
+			if ( ! empty( $villager_name ) && ! empty( $island_name ) ) {
+				// Create username from name@island
+				$username = sanitize_user( strtolower( $villager_name . '@' . $island_name ) );
+			}
+			
 			// Ensure unique username
 			if ( username_exists( $username ) ) {
 				$username .= '_' . rand( 1000, 9999 );
