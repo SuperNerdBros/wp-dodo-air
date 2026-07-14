@@ -50,7 +50,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			) );
 
 			// Profiles endpoints
-			register_rest_route( 'dodo-air/v1', '/profiles/(?P<id>[a-zA-Z0-9_-]+)', array(
+			register_rest_route( 'dodo-air/v1', '/profiles/me', array(
 				'methods'  => 'POST',
 				'callback' => array( $this, 'save_profile' ),
 				'permission_callback' => '__return_true',
@@ -199,6 +199,46 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		update_option( 'dodo_air_' . $key, $data );
 	}
 
+	private function get_dynamic_profiles() {
+		$profiles = get_transient( 'dodo_air_dynamic_profiles' );
+		if ( false !== $profiles ) {
+			return $profiles;
+		}
+
+		$all_users = get_users( array( 'fields' => array( 'ID', 'display_name' ) ) );
+		$profiles = array();
+
+		foreach ( $all_users as $u ) {
+			$passport = get_user_meta( $u->ID, '_dodo_air_passport', true );
+			
+			if ( ! is_array( $passport ) ) {
+				$passport = array(
+					'villagerName' => $u->display_name,
+					'islandName' => 'Unknown Island',
+					'titlePart1' => 'Freshly Picked',
+					'titlePart2' => 'Islander',
+					'avatarIcon' => '🦤',
+					'signature' => 'Wings up!',
+					'colorIndex' => 1,
+					'hasCreated' => true,
+				);
+			}
+
+			$passport['userId'] = (string) $u->ID;
+			$passport['xp'] = (int) get_user_meta( $u->ID, '_xp_total_xp', true );
+			$passport['miles'] = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
+			
+			// Get ratings
+			$passport['goodApples'] = (int) get_user_meta( $u->ID, 'dodo_air_good_apples', true );
+			$passport['rottenTurnips'] = (int) get_user_meta( $u->ID, 'dodo_air_rotten_turnips', true );
+			
+			$profiles[ $u->ID ] = $passport;
+		}
+
+		set_transient( 'dodo_air_dynamic_profiles', $profiles, 300 );
+		return $profiles;
+	}
+
 	public function get_state( $request ) {
 		$user_id = get_current_user_id();
 		$user_schedules = array();
@@ -274,7 +314,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			'dreams'   => $this->get_data( 'dreams' ),
 			'chatter'  => $this->get_data( 'chatter' ),
 			'requests' => $this->get_data( 'requests' ),
-			'profiles' => $this->get_data( 'profiles' ),
+			'profiles' => $this->get_dynamic_profiles(),
 			'mySchedules' => $user_schedules,
 			'myPassport' => $user_passport,
 			'totalIslanders' => $total_users,
@@ -346,11 +386,13 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			$params['flightNumber'] = $this->generate_flight_number();
 		}
 
+		$existing = get_user_meta( $user_id, '_dodo_air_passport', true );
+		if ( is_array( $existing ) ) {
+			$params = array_merge( $existing, $params );
+		}
+
 		update_user_meta( $user_id, '_dodo_air_passport', $params );
-		
-		$profiles = $this->get_data( 'profiles' );
-		$profiles[ $params['friendCode'] ] = $params;
-		$this->update_data( 'profiles', $profiles );
+		delete_transient( 'dodo_air_dynamic_profiles' );
 		
 		return new WP_REST_Response( array( 'success' => true, 'passport' => $params ), 200 );
 	}
@@ -675,43 +717,29 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	}
 
 	public function rate_profile( $request ) {
-		$target_friendCode = $request->get_param( 'id' );
+		$target_user_id = (int) $request->get_param( 'id' );
 		$params = $request->get_json_params();
 		$ratingType = $params['ratingType']; // 'apple' or 'turnip'
 		
 		$user_id = get_current_user_id();
+		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
 		
-		$profiles = $this->get_data( 'profiles' );
-		if ( isset( $profiles[$target_friendCode] ) ) {
-			$p = $profiles[$target_friendCode];
-			if ( $ratingType === 'apple' ) {
-				$p['goodApples'] = isset($p['goodApples']) ? $p['goodApples'] + 1 : 1;
-			} else {
-				$p['rottenTurnips'] = isset($p['rottenTurnips']) ? $p['rottenTurnips'] + 1 : 1;
-			}
-			$profiles[$target_friendCode] = $p;
-			$this->update_data('profiles', $profiles);
-			
-			$host_user_id = null;
-			$users = get_users(array(
-				'meta_key' => '_dodo_air_passport',
-				'meta_compare' => 'EXISTS'
-			));
-			foreach( $users as $u ) {
-				$pass = get_user_meta( $u->ID, '_dodo_air_passport', true );
-				if ( isset( $pass['friendCode'] ) && $pass['friendCode'] === $target_friendCode ) {
-					$host_user_id = $u->ID;
-					
-					// Base 100 miles. Apple = 2x, Turnip = 0.5x
-					$reward = $ratingType === 'apple' ? 200 : 50;
-					$host_miles = (int) get_user_meta( $host_user_id, '_xp_total_gp', true );
-					update_user_meta( $host_user_id, '_xp_total_gp', $host_miles + $reward );
-					
-					do_action( 'xophz_compass_record_action', 'dal_flight_rated_' . $ratingType, $host_user_id, array() );
-					break;
-				}
-			}
+		if ( $ratingType === 'apple' ) {
+			$apples = (int) get_user_meta( $target_user_id, 'dodo_air_good_apples', true );
+			update_user_meta( $target_user_id, 'dodo_air_good_apples', $apples + 1 );
+		} else {
+			$turnips = (int) get_user_meta( $target_user_id, 'dodo_air_rotten_turnips', true );
+			update_user_meta( $target_user_id, 'dodo_air_rotten_turnips', $turnips + 1 );
 		}
+		
+		delete_transient( 'dodo_air_dynamic_profiles' );
+		
+		// Base 100 miles. Apple = 2x, Turnip = 0.5x
+		$reward = $ratingType === 'apple' ? 200 : 50;
+		$host_miles = (int) get_user_meta( $target_user_id, '_xp_total_gp', true );
+		update_user_meta( $target_user_id, '_xp_total_gp', $host_miles + $reward );
+					
+		do_action( 'xophz_compass_record_action', 'dal_flight_rated_' . $ratingType, $target_user_id, array() );
 		
 		// Give miles to rater
 		if ( $user_id ) {
@@ -837,6 +865,14 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			$chatter = array_slice( $chatter, 0, 50 );
 		}
 		$this->update_data( 'chatter', $chatter );
+
+		// Fire webhook to WebSocket server
+		wp_remote_post( 'https://chatter.ai.studio/webhook/chatter', array(
+			'body' => wp_json_encode( $newMessage ),
+			'headers' => array( 'Content-Type' => 'application/json' ),
+			'timeout' => 2,
+			'blocking' => false,
+		) );
 	}
 
 	public function auth_status( $request ) {
