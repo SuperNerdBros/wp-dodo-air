@@ -869,9 +869,11 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			}
 			
 			// Ensure unique username
-			if ( username_exists( $username ) ) {
-				$username .= '_' . rand( 1000, 9999 );
+			$base_username = $username;
+			while ( username_exists( $username ) ) {
+				$username = $base_username . '_' . rand( 1000, 9999 );
 			}
+			
 			$password = wp_generate_password( 24, true, true );
 			$user_id = wp_create_user( $username, $password, $email );
 			if ( is_wp_error( $user_id ) ) {
