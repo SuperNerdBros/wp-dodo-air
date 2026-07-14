@@ -182,6 +182,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$user_passport = null;
 		
 		if ( $user_id ) {
+			// Update last active timestamp for online tracking (throttled to 60s)
+			$last_active = get_user_meta( $user_id, 'dodo_air_last_active', true );
+			if ( ! $last_active || ( time() - (int) $last_active > 60 ) ) {
+				update_user_meta( $user_id, 'dodo_air_last_active', time() );
+			}
+
 			$user_schedules = get_user_meta( $user_id, '_dodo_air_schedules', true ) ?: array();
 			$user_passport = get_user_meta( $user_id, '_dodo_air_passport', true );
 			
@@ -198,7 +204,18 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$total_users = $user_counts['total_users'];
 		
 		global $wpdb;
-		$online_users = (int) $wpdb->get_var("SELECT COUNT(DISTINCT user_id) FROM {$wpdb->usermeta} WHERE meta_key = 'session_tokens'");
+		// Cache the online users count using a transient (60 seconds)
+		$online_users = get_transient( 'dodo_air_online_users_count' );
+		
+		if ( false === $online_users ) {
+			// Count users active in the last 120 seconds (since writes are throttled to 60s)
+			$active_window = time() - 120;
+			$online_users = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT COUNT(DISTINCT user_id) FROM {$wpdb->usermeta} WHERE meta_key = 'dodo_air_last_active' AND CAST(meta_value AS UNSIGNED) > %d",
+				$active_window
+			) );
+			set_transient( 'dodo_air_online_users_count', $online_users, 60 );
+		}
 		
 		$views = (int) get_option( 'dodo_air_views', 0 );
 		$visitors = get_option( 'dodo_air_visitor_ids', array() );
