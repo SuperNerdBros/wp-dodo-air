@@ -56,6 +56,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 
+			register_rest_route( 'dodo-air/v1', '/stamps/claim', array(
+				'methods'  => 'POST',
+				'callback' => array( $this, 'claim_stamp' ),
+				'permission_callback' => '__return_true',
+			) );
+
 			register_rest_route( 'dodo-air/v1', '/requests', array(
 				'methods'  => 'POST',
 				'callback' => array( $this, 'add_request' ),
@@ -332,6 +338,26 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		return new WP_REST_Response( array( 'success' => true, 'passport' => $params ), 200 );
 	}
 
+	public function claim_stamp( $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
+		
+		$params = $request->get_json_params();
+		$stamp_id = isset( $params['stampId'] ) ? sanitize_text_field( $params['stampId'] ) : '';
+		$miles = isset( $params['miles'] ) ? (int) $params['miles'] : 0;
+
+		if ( $miles > 0 ) {
+			$current_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+			update_user_meta( $user_id, '_xp_total_gp', $current_miles + $miles );
+		}
+
+		if ( $stamp_id ) {
+			do_action( 'xophz_compass_record_action', 'dal_claimed_stamp', $user_id, array( 'stamp_id' => $stamp_id ) );
+		}
+
+		return new WP_REST_Response( array( 'success' => true, 'milesAwarded' => $miles ), 200 );
+	}
+
 	public function add_request( $request ) {
 		$params = $request->get_json_params();
 		$requests = $this->get_data( 'requests' );
@@ -385,7 +411,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		
 		$user_id = get_current_user_id();
 		if ( $user_id ) {
-			do_action( 'xp_gamification_action', $user_id, 'dal_hosted_flight' );
+			do_action( 'xophz_compass_record_action', 'dal_hosted_flight', $user_id, array() );
 		}
 
 		return new WP_REST_Response( $newFlight, 200 );
@@ -461,7 +487,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				$this->internal_add_chatter( 'Orville [AI]', $params['name'] . ' just boarded Flight ' . $id . ' to ' . $f['islandName'] . '!' );
 				
 				if ( $user_id ) {
-					do_action( 'xp_gamification_action', $user_id, 'dal_boarded_flight' );
+					do_action( 'xophz_compass_record_action', 'dal_boarded_flight', $user_id, array() );
 				}
 				break;
 			}
@@ -664,7 +690,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					$host_miles = (int) get_user_meta( $host_user_id, '_xp_total_gp', true );
 					update_user_meta( $host_user_id, '_xp_total_gp', $host_miles + $reward );
 					
-					do_action( 'xp_gamification_action', $host_user_id, 'dal_flight_rated_' . $ratingType );
+					do_action( 'xophz_compass_record_action', 'dal_flight_rated_' . $ratingType, $host_user_id, array() );
 					break;
 				}
 			}
@@ -679,7 +705,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			$rater_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
 			update_user_meta( $user_id, '_xp_total_gp', $rater_miles + $rater_reward );
 			
-			do_action( 'xp_gamification_action', $user_id, 'dal_gave_rating' );
+			do_action( 'xophz_compass_record_action', 'dal_gave_rating', $user_id, array() );
 		}
 
 		return new WP_REST_Response( array( 'success' => true ), 200 );
