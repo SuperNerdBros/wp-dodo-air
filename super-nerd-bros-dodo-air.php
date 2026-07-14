@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Dodo Airlines Flight Hub
  * Description:       Standalone WordPress backend and router for the Dodo Air SvelteKit app.
- * Version:           26.7.14.122
+ * Version:           26.7.14.226
  * Author:            Hall of the Gods, Inc.
  * Text Domain:       super-nerd-bros-dodo-air
  */
@@ -12,7 +12,7 @@ if ( ! defined( 'WPINC' ) ) {
 	die;
 }
 
-define( 'SUPER_NERD_BROS_DODO_AIR_VERSION', '26.7.14.122' );
+define( 'SUPER_NERD_BROS_DODO_AIR_VERSION', '26.7.14.226' );
 define( 'SUPER_NERD_BROS_DODO_AIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SUPER_NERD_BROS_DODO_AIR_URL', plugin_dir_url( __FILE__ ) );
 
