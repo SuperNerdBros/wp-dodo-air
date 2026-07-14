@@ -686,7 +686,98 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	}
 
 	public function ai_review( $request ) {
-		return new WP_REST_Response( array( 'success' => true, 'message' => 'AI review completed (mock)' ), 200 );
+		$params = $request->get_json_params();
+		$flight_id = $params['flightId'] ?? '';
+		if ( ! $flight_id ) {
+			return new WP_Error( 'missing_id', 'Flight ID is required', array( 'status' => 400 ) );
+		}
+
+		$is_dream = strpos( $flight_id, 'LUNA-' ) === 0;
+		$collection_key = $is_dream ? 'dreams' : 'flights';
+		$items = $this->get_data( $collection_key );
+		
+		$target_item = null;
+		$target_index = -1;
+		foreach ( $items as $index => $item ) {
+			if ( $item['id'] === $flight_id ) {
+				$target_item = $item;
+				$target_index = $index;
+				break;
+			}
+		}
+		
+		if ( ! $target_item ) {
+			return new WP_Error( 'not_found', 'Flight or dream not found.', array( 'status' => 404 ) );
+		}
+
+		$api_key = '';
+		if ( function_exists( 'wp_get_connectors' ) ) {
+			$connectors = wp_get_connectors();
+			if ( ! empty( $connectors['google']['authentication']['setting_name'] ) ) {
+				$api_key = get_option( $connectors['google']['authentication']['setting_name'], '' );
+			}
+		}
+		
+		if ( empty( $api_key ) && defined( 'GEMINI_API_KEY' ) ) {
+			$api_key = GEMINI_API_KEY;
+		}
+
+		if ( empty( $api_key ) ) {
+			return new WP_Error( 'no_api_key', 'AI API key not configured via Connectors or Constants.', array( 'status' => 500 ) );
+		}
+
+		$hostName = $target_item['hostName'] ?? 'Unknown';
+		$islandName = $target_item['islandName'] ?? 'Unknown';
+		$passengers = $target_item['passengers'] ?? array();
+		$passenger_names = implode( ', ', array_column( $passengers, 'name' ) );
+		if ( empty( $passenger_names ) ) {
+			$passenger_names = 'no passengers yet';
+		}
+
+		if ( $is_dream ) {
+			$prompt = "You are Luna from Animal Crossing. Write a short, mystical, and peaceful 2-sentence dream review brochure about the dream of island '{$islandName}' hosted by '{$hostName}'. The dream was visited by: {$passenger_names}. Do not use markdown formatting.";
+		} else {
+			$prompt = "You are Orville from Animal Crossing. Write a short, enthusiastic, and cheerful 2-sentence travel review brochure about the flight to island '{$islandName}' hosted by '{$hostName}'. The passengers were: {$passenger_names}. Do not use markdown formatting.";
+		}
+
+		$url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' . $api_key;
+		$body = array(
+			'contents' => array(
+				array(
+					'parts' => array(
+						array( 'text' => $prompt )
+					)
+				)
+			)
+		);
+
+		$response = wp_remote_post( $url, array(
+			'headers'     => array( 'Content-Type' => 'application/json' ),
+			'body'        => wp_json_encode( $body ),
+			'timeout'     => 15,
+		) );
+
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error( 'ai_error', 'Failed to connect to AI service.', array( 'status' => 500 ) );
+		}
+
+		$response_body = wp_remote_retrieve_body( $response );
+		$data = json_decode( $response_body, true );
+
+		if ( isset( $data['candidates'][0]['content']['parts'][0]['text'] ) ) {
+			$review_text = trim( $data['candidates'][0]['content']['parts'][0]['text'] );
+			$review_text = str_replace( array("\r", "\n"), ' ', $review_text );
+			
+			$items[$target_index]['review'] = $review_text;
+			$this->update_data( $collection_key, $items );
+			
+			$chatter_name = $is_dream ? 'Luna [AI]' : 'Orville [AI]';
+			$this->internal_add_chatter( $chatter_name, "I've compiled a review for {$islandName}! " . $review_text );
+
+			return new WP_REST_Response( array( 'success' => true, 'review' => $review_text ), 200 );
+		}
+
+		return new WP_Error( 'ai_failed', 'AI did not return a valid response.', array( 'status' => 500 ) );
 	}
 
 	private function internal_add_chatter( $sender, $text, $type = 'orville' ) {
