@@ -1,37 +1,154 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" href="/favicon.png" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<link href="/_app/immutable/entry/start.CzNTmsNo.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/Kb5r-Rrl.js" rel="modulepreload">
+
+<head>
+	<meta charset="utf-8" />
+	<link
+		rel="icon"
+		href="/favicon.png"
+	/>
+	<meta
+		name="viewport"
+		content="width=device-width, initial-scale=1"
+	/>
+	<link href="/_app/immutable/entry/start.Db6O6u8D.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DWXf_iDD.js" rel="modulepreload">
 		<link href="/_app/immutable/chunks/B0A3PvhT.js" rel="modulepreload">
-		<link href="/_app/immutable/entry/app.BdSwHR5V.js" rel="modulepreload">
+		<link href="/_app/immutable/entry/app.BK1DhdJl.js" rel="modulepreload">
 		<link href="/_app/immutable/chunks/HclGiUj8.js" rel="modulepreload">
 		<link href="/_app/immutable/chunks/xihTtKlq.js" rel="modulepreload">
-		<link href="/_app/immutable/nodes/0.DY0OND0W.js" rel="modulepreload">
+		<link href="/_app/immutable/nodes/0.pzrxG4B1.js" rel="modulepreload">
 		
-		<link href="/_app/immutable/assets/0.AbAZj9jS.css" rel="stylesheet">
-	</head>
-	<body data-sveltekit-preload-data="hover">
-		<div style="display: contents">
+		<link href="/_app/immutable/assets/0.CVjZ5Irz.css" rel="stylesheet">
+</head>
+
+<body data-sveltekit-preload-data="hover">
+	<div style="display: contents">
+		<style>
+			#dal-loader-wrapper {
+				position: fixed;
+				inset: 0;
+				background-color: #87CEEB;
+				/* Sky blue */
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				z-index: 99999;
+				overflow: hidden;
+				font-family: system-ui, -apple-system, sans-serif;
+			}
+
+			.dal-plane {
+				font-size: 5rem;
+				animation: dal-fly 2s infinite ease-in-out;
+				z-index: 2;
+			}
+
+			.dal-text {
+				margin-top: 1.5rem;
+				font-size: 1.25rem;
+				font-weight: 800;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: white;
+				animation: dal-pulse 1.5s infinite ease-in-out;
+				z-index: 2;
+			}
+
+			.dal-clouds {
+				position: absolute;
+				width: 200%;
+				display: flex;
+				justify-content: space-around;
+				bottom: 20%;
+				animation: dal-pan 15s linear infinite;
+				opacity: 0.6;
+				z-index: 1;
+			}
+
+			.dal-cloud {
+				font-size: 4rem;
+				color: white;
+			}
+
+			@keyframes dal-fly {
+
+				0%,
+				100% {
+					transform: translateY(0px) rotate(0deg);
+				}
+
+				50% {
+					transform: translateY(-20px) rotate(5deg);
+				}
+			}
+
+			@keyframes dal-pulse {
+
+				0%,
+				100% {
+					opacity: 0.7;
+					transform: scale(1);
+				}
+
+				50% {
+					opacity: 1;
+					transform: scale(1.05);
+				}
+			}
+
+			@keyframes dal-pan {
+				0% {
+					transform: translateX(50%);
+				}
+
+				100% {
+					transform: translateX(-50%);
+				}
+			}
+		</style>
+		<div id="dal-loader-wrapper">
+			<div class="dal-clouds">
+				<div class="dal-cloud">☁️</div>
+				<div
+					class="dal-cloud"
+					style="margin-top: 40px; font-size: 3rem;"
+				>☁️</div>
+				<div class="dal-cloud">☁️</div>
+				<div
+					class="dal-cloud"
+					style="margin-top: 20px; font-size: 5rem;"
+				>☁️</div>
+				<div class="dal-cloud">☁️</div>
+				<div
+					class="dal-cloud"
+					style="margin-top: 40px; font-size: 3rem;"
+				>☁️</div>
+				<div class="dal-cloud">☁️</div>
+			</div>
+			<div class="dal-plane">🛩️</div>
+			<div class="dal-text">Preparing for Takeoff...</div>
+		</div>
+		
 			<script>
 				{
-					__sveltekit_16gmz4s = {
+					__sveltekit_vjapoz = {
 						base: ""
 					};
 
 					const element = document.currentScript.parentElement;
 
 					Promise.all([
-						import("/_app/immutable/entry/start.CzNTmsNo.js"),
-						import("/_app/immutable/entry/app.BdSwHR5V.js")
+						import("/_app/immutable/entry/start.Db6O6u8D.js"),
+						import("/_app/immutable/entry/app.BK1DhdJl.js")
 					]).then(([kit, app]) => {
 						kit.start(app, element);
 					});
 				}
 			</script>
-		</div>
-	</body>
+		
+	</div>
+</body>
+
 </html>
