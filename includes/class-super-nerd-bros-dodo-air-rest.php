@@ -171,6 +171,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'callback' => array( $this, 'auth_logout' ),
 				'permission_callback' => '__return_true',
 			) );
+
+			register_rest_route( 'dodo-air/v1', '/badges/(?P<type>[a-zA-Z0-9_-]+)', array(
+				'methods'  => 'GET',
+				'callback' => array( $this, 'get_badge' ),
+				'permission_callback' => '__return_true',
+			) );
 		} );
 	}
 
@@ -938,6 +944,53 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			'visitors' => count( $visitors ),
 			'alltimePilots' => (int) get_option( 'dodo_air_alltime_pilots', 0 ),
 			'alltimePassengers' => (int) get_option( 'dodo_air_alltime_passengers', 0 ),
+		), 200 );
+	}
+
+	public function get_badge( $request ) {
+		$type = $request->get_param( 'type' );
+		
+		$label = 'dodo air';
+		$message = 'unknown';
+		$color = 'lightgrey';
+		
+		if ( $type === 'online' ) {
+			global $wpdb;
+			$active_window = time() - 120;
+			$online = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT COUNT(DISTINCT user_id) FROM {$wpdb->usermeta} WHERE meta_key = 'dodo_air_last_active' AND CAST(meta_value AS UNSIGNED) > %d",
+				$active_window
+			) );
+			$label = 'islanders online';
+			$message = (string) $online;
+			$color = 'success';
+		} elseif ( $type === 'pilots' ) {
+			$pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+			$label = 'all-time pilots';
+			$message = (string) $pilots;
+			$color = 'blue';
+		} elseif ( $type === 'passengers' ) {
+			$passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+			$label = 'all-time passengers';
+			$message = (string) $passengers;
+			$color = 'blue';
+		} elseif ( $type === 'total' ) {
+			$user_counts = count_users();
+			$label = 'total islanders';
+			$message = (string) $user_counts['total_users'];
+			$color = 'blue';
+		} elseif ( $type === 'views' ) {
+			$views = (int) get_option( 'dodo_air_views', 0 );
+			$label = 'total views';
+			$message = (string) $views;
+			$color = 'orange';
+		}
+		
+		return new WP_REST_Response( array(
+			'schemaVersion' => 1,
+			'label' => $label,
+			'message' => $message,
+			'color' => $color,
 		), 200 );
 	}
 }
