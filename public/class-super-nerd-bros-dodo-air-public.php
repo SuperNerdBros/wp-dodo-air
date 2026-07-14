@@ -101,10 +101,11 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 					$dev_html = str_replace('</head>', $vite_client . "\n</head>", $dev_html);
 				}
 
-				// Inject WP API Settings
+				// Inject WP API Settings & Google Tag
 				$nonce = wp_create_nonce('wp_rest');
 				$wp_api_settings = "<script>window.wpApiSettings = { root: '" . esc_url_raw(rest_url()) . "', nonce: '" . $nonce . "', pluginUrl: '" . esc_url_raw(SUPER_NERD_BROS_DODO_AIR_URL) . "' };</script>";
-				$dev_html = str_replace('</head>', $wp_api_settings . "\n</head>", $dev_html);
+				$gtag_script = $this->get_gtag_script();
+				$dev_html = str_replace('</head>', $wp_api_settings . $gtag_script . "\n</head>", $dev_html);
 				
 				echo $dev_html;
 				exit;
@@ -131,10 +132,11 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 			$app_base_slash = $app_base ? '/' . ltrim( $app_base, '/' ) : '';
 			$html = preg_replace( '/base:\s*""/', 'base: "' . esc_js( $app_base_slash ) . '"', $html );
 			
-			// Inject WP API Settings
+			// Inject WP API Settings & Google Tag
 			$nonce = wp_create_nonce('wp_rest');
 			$wp_api_settings = "<script>window.wpApiSettings = { root: '" . esc_url_raw(rest_url()) . "', nonce: '" . $nonce . "', pluginUrl: '" . esc_url_raw(SUPER_NERD_BROS_DODO_AIR_URL) . "' };</script>";
-			$html = str_replace('</head>', $wp_api_settings . "\n</head>", $html);
+			$gtag_script = $this->get_gtag_script();
+			$html = str_replace('</head>', $wp_api_settings . $gtag_script . "\n</head>", $html);
 
 			echo $html;
 			exit;
@@ -142,5 +144,24 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 			echo '<p>Dodo Air production build not found.</p>';
 			exit;
 		}
+	}
+	private function get_gtag_script() {
+		$gtm_id = get_option( 'compass_google_tag_id' );
+		if ( empty( $gtm_id ) ) {
+			return '';
+		}
+
+		$gtm_id_esc = esc_attr( $gtm_id );
+		return "
+<!-- Google tag (gtag.js) -->
+<script async src=\"https://www.googletagmanager.com/gtag/js?id={$gtm_id_esc}\"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', '{$gtm_id_esc}');
+</script>
+";
 	}
 }
