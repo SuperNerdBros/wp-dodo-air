@@ -348,6 +348,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'alltimePilots' => $alltime_pilots,
 				'alltimePassengers' => $alltime_passengers,
 			),
+			'version' => defined( 'SUPER_NERD_BROS_DODO_AIR_VERSION' ) ? SUPER_NERD_BROS_DODO_AIR_VERSION : 'unknown',
 		), 200 );
 	}
 
