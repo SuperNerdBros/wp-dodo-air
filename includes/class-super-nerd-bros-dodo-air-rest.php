@@ -56,6 +56,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 
+			register_rest_route( 'dodo-air/v1', '/profiles', array(
+				'methods'  => 'POST',
+				'callback' => array( $this, 'save_profile' ),
+				'permission_callback' => '__return_true',
+			) );
+
 			register_rest_route( 'dodo-air/v1', '/stamps/claim', array(
 				'methods'  => 'POST',
 				'callback' => array( $this, 'claim_stamp' ),
@@ -179,16 +185,16 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			) );
 		} );
 
-		// Bypass nonce checks for auth endpoints so stale cookies don't block login
-		add_filter( 'rest_cookie_check_errors', function( $error ) {
-			if ( ! empty( $error ) ) {
+		// Bypass nonce checks for all dodo-air endpoints so stale nonces (from open tabs) don't block API calls
+		add_filter( 'rest_authentication_errors', function( $error ) {
+			if ( is_wp_error( $error ) && $error->get_error_code() === 'rest_cookie_invalid_nonce' ) {
 				$uri = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : '';
-				if ( strpos( $uri, '/wp-json/dodo-air/v1/auth/' ) !== false ) {
-					return null;
+				if ( strpos( $uri, '/wp-json/dodo-air/v1/' ) !== false ) {
+					return true;
 				}
 			}
 			return $error;
-		} );
+		}, 101 );
 	}
 
 	private function get_data( $key ) {
@@ -200,42 +206,54 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	}
 
 	private function get_dynamic_profiles() {
-		$profiles = get_transient( 'dodo_air_dynamic_profiles' );
+		$profiles = get_transient( 'dodo_air_dynamic_profiles_v2' );
 		if ( false !== $profiles ) {
 			return $profiles;
 		}
 
-		$all_users = get_users( array( 'fields' => array( 'ID', 'display_name' ) ) );
+		$all_users = get_users();
 		$profiles = array();
 
 		foreach ( $all_users as $u ) {
-			$passport = get_user_meta( $u->ID, '_dodo_air_passport', true );
+			$passports = get_user_meta( $u->ID, '_dodo_air_passports', true );
 			
-			if ( ! is_array( $passport ) ) {
-				$passport = array(
-					'villagerName' => $u->display_name,
-					'islandName' => 'Unknown Island',
-					'titlePart1' => 'Freshly Picked',
-					'titlePart2' => 'Islander',
-					'avatarIcon' => '🦤',
-					'signature' => 'Wings up!',
-					'colorIndex' => 1,
-					'hasCreated' => true,
-				);
+			if ( ! is_array( $passports ) || empty( $passports ) ) {
+				$passport = get_user_meta( $u->ID, '_dodo_air_passport', true );
+				if ( ! is_array( $passport ) ) {
+					$passport = array(
+						'villagerName' => $u->display_name,
+						'islandName' => 'Unknown Island',
+						'titlePart1' => 'Freshly Picked',
+						'titlePart2' => 'Islander',
+						'avatarIcon' => '🦤',
+						'signature' => 'Wings up!',
+						'colorIndex' => 1,
+						'hasCreated' => false,
+					);
+				}
+				$passports = array( $passport );
 			}
 
-			$passport['userId'] = (string) $u->ID;
-			$passport['xp'] = (int) get_user_meta( $u->ID, '_xp_total_xp', true );
-			$passport['miles'] = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
-			
-			// Get ratings
-			$passport['goodApples'] = (int) get_user_meta( $u->ID, 'dodo_air_good_apples', true );
-			$passport['rottenTurnips'] = (int) get_user_meta( $u->ID, 'dodo_air_rotten_turnips', true );
-			
-			$profiles[ $u->ID ] = $passport;
+			foreach ( $passports as $index => $passport ) {
+				// Ensure everyone has at least an empty friendCode so Svelte doesn't get duplicate undefined keys
+				if ( ! isset( $passport['friendCode'] ) ) {
+					$passport['friendCode'] = 'SW-0000-0000-' . str_pad($u->ID, 4, '0', STR_PAD_LEFT) . '-' . $index;
+				}
+
+				$passport['userId'] = (string) $u->ID;
+				$passport['passportIndex'] = $index;
+				$passport['xp'] = (int) get_user_meta( $u->ID, '_xp_total_xp', true );
+				$passport['miles'] = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
+				
+				// Get ratings
+				$passport['goodApples'] = (int) get_user_meta( $u->ID, 'dodo_air_good_apples', true );
+				$passport['rottenTurnips'] = (int) get_user_meta( $u->ID, 'dodo_air_rotten_turnips', true );
+				
+				$profiles[ $u->ID . '_' . $index ] = $passport;
+			}
 		}
 
-		set_transient( 'dodo_air_dynamic_profiles', $profiles, 300 );
+		set_transient( 'dodo_air_dynamic_profiles_v2', $profiles, 300 );
 		return $profiles;
 	}
 
@@ -252,15 +270,19 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			}
 
 			$user_schedules = get_user_meta( $user_id, '_dodo_air_schedules', true ) ?: array();
-			$user_passport = get_user_meta( $user_id, '_dodo_air_passport', true );
 			
-			if ( ! is_array( $user_passport ) ) {
-				$user_passport = array();
+			$user_passports = get_user_meta( $user_id, '_dodo_air_passports', true );
+			if ( ! is_array( $user_passports ) || empty( $user_passports ) ) {
+				$single = get_user_meta( $user_id, '_dodo_air_passport', true );
+				$user_passports = is_array( $single ) ? array( $single ) : array();
 			}
 
-			// Piggyback on the xophz-compass-xp system
-			$user_passport['xp'] = (int) get_user_meta( $user_id, '_xp_total_xp', true );
-			$user_passport['miles'] = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+			foreach ( $user_passports as &$p ) {
+				$p['xp'] = (int) get_user_meta( $user_id, '_xp_total_xp', true );
+				$p['miles'] = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+			}
+			unset($p);
+			$user_passport = empty( $user_passports ) ? array() : $user_passports[0];
 		}
 		
 		$user_counts = count_users();
@@ -316,6 +338,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			'requests' => $this->get_data( 'requests' ),
 			'profiles' => $this->get_dynamic_profiles(),
 			'mySchedules' => $user_schedules,
+			'myPassports' => isset($user_passports) ? $user_passports : array(),
 			'myPassport' => $user_passport,
 			'totalIslanders' => $total_users,
 			'onlineIslanders' => $online_users,
@@ -382,6 +405,29 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		
 		$params = $request->get_json_params();
 
+		// Handle array of passports format
+		if ( isset( $params['passports'] ) && is_array( $params['passports'] ) ) {
+			$passports = $params['passports'];
+			foreach ( $passports as &$p ) {
+				if ( empty( $p['flightNumber'] ) ) {
+					$p['flightNumber'] = $this->generate_flight_number();
+				}
+			}
+			unset($p);
+			update_user_meta( $user_id, '_dodo_air_passports', $passports );
+			
+			// Update single passport for backwards compatibility (the active one)
+			$active_index = isset($params['activePassportIndex']) ? (int)$params['activePassportIndex'] : 0;
+			if ( isset($passports[$active_index]) ) {
+				update_user_meta( $user_id, '_dodo_air_passport', $passports[$active_index] );
+				$params = $passports[$active_index]; // for the response
+			}
+			
+			delete_transient( 'dodo_air_dynamic_profiles_v2' );
+			return new WP_REST_Response( array( 'success' => true, 'passports' => $passports, 'passport' => $params ), 200 );
+		}
+
+		// Fallback for single passport save
 		if ( empty( $params['flightNumber'] ) ) {
 			$params['flightNumber'] = $this->generate_flight_number();
 		}
@@ -392,9 +438,15 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		}
 
 		update_user_meta( $user_id, '_dodo_air_passport', $params );
-		delete_transient( 'dodo_air_dynamic_profiles' );
 		
-		return new WP_REST_Response( array( 'success' => true, 'passport' => $params ), 200 );
+		$passports = get_user_meta( $user_id, '_dodo_air_passports', true );
+		if ( ! is_array( $passports ) ) $passports = array( $existing ?: array() );
+		$passports[0] = $params;
+		update_user_meta( $user_id, '_dodo_air_passports', $passports );
+
+		delete_transient( 'dodo_air_dynamic_profiles_v2' );
+		
+		return new WP_REST_Response( array( 'success' => true, 'passport' => $params, 'passports' => $passports ), 200 );
 	}
 
 	public function claim_stamp( $request ) {
@@ -515,7 +567,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					update_user_meta( $user_id, '_xp_total_gp', $passenger_miles - $milesCost );
 					
 					$host_friendCode = isset($f['hostFriendCode']) ? $f['hostFriendCode'] : null;
-					if ( $host_friendCode ) {
+					$host_userId = isset($f['hostUserId']) ? $f['hostUserId'] : null;
+					
+					if ( $host_userId ) {
+						$host_miles = (int) get_user_meta( $host_userId, '_xp_total_gp', true );
+						update_user_meta( $host_userId, '_xp_total_gp', $host_miles + $milesCost );
+					} elseif ( $host_friendCode ) {
 						$users = get_users(array(
 							'meta_key' => '_dodo_air_passport',
 							'meta_compare' => 'EXISTS'
@@ -702,16 +759,27 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 
 		update_user_meta( $user_id, '_xp_total_gp', $miles - 500 );
 		
-		$passport = get_user_meta( $user_id, '_dodo_air_passport', true );
-		$new_number = $this->generate_flight_number();
-		$passport['flightNumber'] = $new_number;
-		update_user_meta( $user_id, '_dodo_air_passport', $passport );
+		$params = $request->get_json_params();
+		$active_index = isset($params['activePassportIndex']) ? (int)$params['activePassportIndex'] : 0;
 		
-		$profiles = $this->get_data( 'profiles' );
-		if ( isset( $passport['friendCode'] ) ) {
-			$profiles[ $passport['friendCode'] ] = $passport;
-			$this->update_data( 'profiles', $profiles );
+		$new_number = $this->generate_flight_number();
+		
+		$passports = get_user_meta( $user_id, '_dodo_air_passports', true );
+		if ( ! is_array( $passports ) ) {
+			$single = get_user_meta( $user_id, '_dodo_air_passport', true );
+			$passports = is_array( $single ) ? array( $single ) : array();
 		}
+		
+		if ( isset( $passports[$active_index] ) ) {
+			$passports[$active_index]['flightNumber'] = $new_number;
+			update_user_meta( $user_id, '_dodo_air_passports', $passports );
+			
+			if ( $active_index === 0 ) {
+				update_user_meta( $user_id, '_dodo_air_passport', $passports[$active_index] );
+			}
+		}
+		
+		delete_transient( 'dodo_air_dynamic_profiles_v2' );
 		
 		return new WP_REST_Response( array( 'success' => true, 'flightNumber' => $new_number, 'miles' => $miles - 500 ), 200 );
 	}
@@ -923,7 +991,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		update_user_meta( $user->ID, '_dodo_air_temp_code_expiry', time() + ( 15 * MINUTE_IN_SECONDS ) );
 
 		// Send email
-		$subject = 'Your Dodo Airlines Access Code';
+		$subject = '🦤 Your Dodo Airlines Access Code 🛩️';
 		$message = "Welcome to Dodo Airlines!\n\nYour temporary access code is: $code\n\nThis code will expire in 15 minutes.";
 		wp_mail( $email, $subject, $message );
 
