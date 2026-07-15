@@ -98,6 +98,12 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 
+			register_rest_route( 'dodo-air/v1', '/profiles/(?P<id>[a-zA-Z0-9_-]+)/rate-dream', array(
+				'methods'  => 'POST',
+				'callback' => array( $this, 'rate_dream' ),
+				'permission_callback' => '__return_true',
+			) );
+
 			register_rest_route( 'dodo-air/v1', '/flights/(?P<id>[a-zA-Z0-9_-]+)/status', array(
 				'methods'  => 'POST',
 				'callback' => array( $this, 'update_flight_status' ),
@@ -248,6 +254,17 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				// Get ratings
 				$passport['goodApples'] = (int) get_user_meta( $u->ID, 'dodo_air_good_apples', true );
 				$passport['rottenTurnips'] = (int) get_user_meta( $u->ID, 'dodo_air_rotten_turnips', true );
+
+				// Dream Z-ratings (per-passport)
+				$dream_ratings_raw = get_user_meta( $u->ID, 'dodo_air_dream_ratings_' . $index, true );
+				$dream_ratings = is_array( $dream_ratings_raw ) ? $dream_ratings_raw : array();
+				$passport['dreamRatingCount'] = count( $dream_ratings );
+				if ( $passport['dreamRatingCount'] > 0 ) {
+					$sum = array_sum( array_column( $dream_ratings, 'rating' ) );
+					$passport['dreamRatingAvg'] = round( $sum / $passport['dreamRatingCount'], 1 );
+				} else {
+					$passport['dreamRatingAvg'] = 0;
+				}
 				
 				$profiles[ $u->ID . '_' . $index ] = $passport;
 			}
@@ -397,7 +414,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$counter = (int) get_option( 'dodo_air_flight_counter', 1 );
 		update_option( 'dodo_air_flight_counter', $counter + 1 );
 		$base36 = strtoupper( base_convert( $counter, 10, 36 ) );
-		return str_pad( $base36, 4, '0', STR_PAD_LEFT );
+		return 'DAL-' . str_pad( $base36, 4, '0', STR_PAD_LEFT );
 	}
 
 	public function save_profile( $request ) {
@@ -501,25 +518,50 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$flights = $this->get_data( 'flights' );
 		
-		$flightId = isset($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
+		$flightNumber = isset($params['flightNumber']) && !empty($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
 		$milesCost = isset($params['milesCost']) ? (int) $params['milesCost'] : 0;
 
-		$newFlight = array_merge( $params, array(
-			'id' => $flightId,
-			'status' => 'Scheduled',
-			'passengers' => array(),
-			'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-			'milesCost' => $milesCost
-		) );
+		$existing_index = -1;
+		foreach ( $flights as $index => $f ) {
+			if ( isset($f['flightNumber']) && $f['flightNumber'] === $flightNumber ) {
+				$existing_index = $index;
+				break;
+			}
+		}
+
+		if ( $existing_index !== -1 ) {
+			$newFlight = array_merge( $flights[$existing_index], $params, array(
+				'status' => 'Scheduled',
+				'passengers' => array(),
+				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'milesCost' => $milesCost
+			) );
+			
+			array_splice( $flights, $existing_index, 1 );
+			array_unshift( $flights, $newFlight );
+			
+			$this->internal_add_chatter( 'Orville', 'Attention! Flight ' . (isset($newFlight['flightNumber']) ? $newFlight['flightNumber'] : $newFlight['id']) . ' to ' . $newFlight['islandName'] . ' is back online and accepting passengers at Gate ' . $newFlight['gate'] . '.' );
+		} else {
+			$flightId = 'fl-' . uniqid() . '-' . rand(100, 999);
+			$newFlight = array_merge( $params, array(
+				'id' => $flightId,
+				'flightNumber' => $flightNumber,
+				'status' => 'Scheduled',
+				'passengers' => array(),
+				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'milesCost' => $milesCost
+			) );
+			
+			array_unshift( $flights, $newFlight );
+			
+			$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+			$alltime_pilots++;
+			update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
+			
+			$this->internal_add_chatter( 'Orville', 'Attention! New flight ' . (isset($newFlight['flightNumber']) ? $newFlight['flightNumber'] : $newFlight['id']) . ' to ' . $newFlight['islandName'] . ' is now accepting passengers at Gate ' . $newFlight['gate'] . '.' );
+		}
 		
-		array_unshift( $flights, $newFlight );
 		$this->update_data( 'flights', $flights );
-		
-		$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
-		$alltime_pilots++;
-		update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
-		
-		$this->internal_add_chatter( 'Orville [AI]', 'Attention! New flight ' . $newFlight['id'] . ' to ' . $newFlight['islandName'] . ' is now accepting passengers at Gate ' . $newFlight['gate'] . '.' );
 		
 		$user_id = get_current_user_id();
 		if ( $user_id ) {
@@ -541,7 +583,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
 					$f['dodoCode'] = $params['dodoCode'];
 				}
-				$this->internal_add_chatter( 'Orville [AI]', 'Update for Flight ' . $id . ': Status changed to ' . strtoupper( $status ) . '.' );
+				$this->internal_add_chatter( 'Orville', 'Update for Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . ': Status changed to ' . strtoupper( $status ) . '.' );
 				break;
 			}
 		}
@@ -601,7 +643,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				$alltime_passengers++;
 				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
 				
-				$this->internal_add_chatter( 'Orville [AI]', $params['name'] . ' just boarded Flight ' . $id . ' to ' . $f['islandName'] . '!' );
+				$this->internal_add_chatter( 'Orville', $params['name'] . ' just boarded Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . ' to ' . $f['islandName'] . '!' );
 				
 				if ( $user_id ) {
 					do_action( 'xophz_compass_record_action', 'dal_boarded_flight', $user_id, array() );
@@ -632,7 +674,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				}
 				if ( $p ) {
 					$f['passengers'] = array_values( $f['passengers'] );
-					$this->internal_add_chatter( 'Orville [AI]', $p['name'] . ' left Flight ' . $id . '.' );
+					$this->internal_add_chatter( 'Orville', $p['name'] . ' left Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . '.' );
 				}
 				break;
 			}
@@ -646,22 +688,51 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$dreams = $this->get_data( 'dreams' );
 		
-		$newDream = array_merge( $params, array(
-			'id' => 'LUNA-' . rand( 1000, 9999 ),
-			'status' => 'Scheduled',
-			'passengers' => array(),
-			'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-			'travelType' => 'LUNA'
-		) );
+		$baseNumber = isset($params['flightNumber']) && !empty($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
+		$dreamNumber = str_replace('DAL-', 'LUL-', $baseNumber);
+
+		$existing_index = -1;
+		foreach ( $dreams as $index => $d ) {
+			if ( isset($d['flightNumber']) && $d['flightNumber'] === $dreamNumber ) {
+				$existing_index = $index;
+				break;
+			}
+		}
+
+		if ( $existing_index !== -1 ) {
+			$newDream = array_merge( $dreams[$existing_index], $params, array(
+				'flightNumber' => $dreamNumber,
+				'status' => 'Scheduled',
+				'passengers' => array(),
+				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'travelType' => 'LUNA'
+			) );
+			
+			array_splice( $dreams, $existing_index, 1 );
+			array_unshift( $dreams, $newDream );
+			
+			$this->internal_add_chatter( 'Luna', 'Ah, the dream returns... Dream ' . $dreamNumber . ' at ' . $newDream['islandName'] . ' is once again accessible for dreamers.' );
+		} else {
+			$dreamId = 'dr-' . uniqid() . '-' . rand(100, 999);
+			$newDream = array_merge( $params, array(
+				'id' => $dreamId,
+				'flightNumber' => $dreamNumber,
+				'status' => 'Scheduled',
+				'passengers' => array(),
+				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'travelType' => 'LUNA'
+			) );
+			
+			array_unshift( $dreams, $newDream );
+			
+			$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
+			$alltime_pilots++;
+			update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
+			
+			$this->internal_add_chatter( 'Luna', 'Ah, a new dream has formed... Dream ' . $dreamNumber . ' at ' . $newDream['islandName'] . ' is now accessible for dreamers.' );
+		}
 		
-		array_unshift( $dreams, $newDream );
 		$this->update_data( 'dreams', $dreams );
-		
-		$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
-		$alltime_pilots++;
-		update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
-		
-		$this->internal_add_chatter( 'Luna [AI]', 'Ah, a new dream has formed... ' . $newDream['islandName'] . ' is now accessible for dreamers.' );
 		
 		return new WP_REST_Response( $newDream, 200 );
 	}
@@ -678,7 +749,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
 					$d['dodoCode'] = $params['dodoCode'];
 				}
-				$this->internal_add_chatter( 'Luna [AI]', 'Dream ' . $id . ' status is now ' . strtoupper( $status ) . '.' );
+				$this->internal_add_chatter( 'Luna', 'Dream ' . (isset($d['flightNumber']) ? $d['flightNumber'] : $id) . ' status is now ' . strtoupper( $status ) . '.' );
 				break;
 			}
 		}
@@ -706,7 +777,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				$alltime_passengers++;
 				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
 				
-				$this->internal_add_chatter( 'Luna [AI]', $params['name'] . ' has drifted into the dream of ' . $d['islandName'] . '...' );
+				$this->internal_add_chatter( 'Luna', $params['name'] . ' has drifted into the dream of ' . $d['islandName'] . '...' );
 				break;
 			}
 		}
@@ -733,7 +804,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				}
 				if ( $p ) {
 					$d['passengers'] = array_values( $d['passengers'] );
-					$this->internal_add_chatter( 'Luna [AI]', $p['name'] . ' has awoken from the dream of ' . $id . '.' );
+					$this->internal_add_chatter( 'Luna', $p['name'] . ' has awoken from the dream of ' . (isset($d['flightNumber']) ? $d['flightNumber'] : $id) . '.' );
 				}
 				break;
 			}
@@ -825,6 +896,65 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
+	/**
+	 * Rate a dream address (1-5 Z scale). Per-passport, per-rater upsert.
+	 */
+	public function rate_dream( $request ) {
+		$target_user_id = (int) $request->get_param( 'id' );
+		$params = $request->get_json_params();
+		$passport_index = isset( $params['passportIndex'] ) ? (int) $params['passportIndex'] : 0;
+		$rating = isset( $params['rating'] ) ? (int) $params['rating'] : 0;
+
+		if ( $rating < 1 || $rating > 5 ) {
+			return new WP_Error( 'invalid_rating', 'Rating must be 1-5.', array( 'status' => 400 ) );
+		}
+
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
+		}
+
+		$meta_key = 'dodo_air_dream_ratings_' . $passport_index;
+		$ratings = get_user_meta( $target_user_id, $meta_key, true );
+		if ( ! is_array( $ratings ) ) {
+			$ratings = array();
+		}
+
+		// Upsert: update existing rating or add new one
+		$found = false;
+		foreach ( $ratings as &$entry ) {
+			if ( (int) $entry['userId'] === $user_id ) {
+				$entry['rating'] = $rating;
+				$found = true;
+				break;
+			}
+		}
+		unset( $entry );
+
+		if ( ! $found ) {
+			$ratings[] = array( 'userId' => $user_id, 'rating' => $rating );
+		}
+
+		update_user_meta( $target_user_id, $meta_key, $ratings );
+		delete_transient( 'dodo_air_dynamic_profiles_v2' );
+
+		// Reward rater with miles
+		$rater_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+		update_user_meta( $user_id, '_xp_total_gp', $rater_miles + 50 );
+		do_action( 'xophz_compass_record_action', 'dal_dream_rated', $user_id, array() );
+
+		// Compute updated average
+		$count = count( $ratings );
+		$sum = array_sum( array_column( $ratings, 'rating' ) );
+		$avg = round( $sum / $count, 1 );
+
+		return new WP_REST_Response( array(
+			'success'       => true,
+			'averageRating' => $avg,
+			'totalRatings'  => $count,
+		), 200 );
+	}
+
 	public function ai_review( $request ) {
 		$params = $request->get_json_params();
 		$flight_id = $params['flightId'] ?? '';
@@ -832,7 +962,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			return new WP_Error( 'missing_id', 'Flight ID is required', array( 'status' => 400 ) );
 		}
 
-		$is_dream = strpos( $flight_id, 'LUNA-' ) === 0;
+		$is_dream = strpos( $flight_id, 'LUL-' ) === 0 || strpos( $flight_id, 'LUNA-' ) === 0 || strpos( $flight_id, 'dr-' ) === 0;
 		$collection_key = $is_dream ? 'dreams' : 'flights';
 		$items = $this->get_data( $collection_key );
 		
@@ -911,7 +1041,7 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			$items[$target_index]['review'] = $review_text;
 			$this->update_data( $collection_key, $items );
 			
-			$chatter_name = $is_dream ? 'Luna [AI]' : 'Orville [AI]';
+			$chatter_name = $is_dream ? 'Luna' : 'Orville';
 			$this->internal_add_chatter( $chatter_name, "I've compiled a review for {$islandName}! " . $review_text );
 
 			return new WP_REST_Response( array( 'success' => true, 'review' => $review_text ), 200 );
@@ -965,6 +1095,10 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 
 		$user = get_user_by( 'email', $email );
 		if ( ! $user ) {
+			if ( empty( $villager_name ) || empty( $island_name ) ) {
+				return new WP_Error( 'needs_names', 'Please provide your villager and island names to create an account.', array( 'status' => 400 ) );
+			}
+
 			// Auto-create user
 			$username = sanitize_user( current( explode( '@', $email ) ) );
 			
