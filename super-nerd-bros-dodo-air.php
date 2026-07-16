@@ -19,8 +19,12 @@ define( 'SUPER_NERD_BROS_DODO_AIR_URL', plugin_dir_url( __FILE__ ) );
 require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'admin/class-super-nerd-bros-dodo-air-admin.php';
 require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'public/class-super-nerd-bros-dodo-air-public.php';
 require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'includes/class-super-nerd-bros-dodo-air-rest.php';
+require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'includes/class-super-nerd-bros-dodo-air-cpt.php';
 
 function run_super_nerd_bros_dodo_air() {
+    $cpt = new Super_Nerd_Bros_Dodo_Air_CPT();
+    add_action( 'init', array( $cpt, 'register_post_types' ) );
+
     $admin = new Super_Nerd_Bros_Dodo_Air_Admin( 'super-nerd-bros-dodo-air', SUPER_NERD_BROS_DODO_AIR_VERSION );
     add_action( 'admin_menu', array( $admin, 'add_plugin_admin_menu' ) );
     add_action( 'admin_init', array( $admin, 'register_settings' ) );

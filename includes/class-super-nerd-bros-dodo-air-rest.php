@@ -16,6 +16,15 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'permission_callback' => '__return_true',
 			) );
 
+			// Nookipedia proxy endpoint
+			register_rest_route( 'dodo-air/v1', '/nookipedia/search', array(
+				'methods'  => 'GET',
+				'callback' => array( $this, 'nookipedia_search' ),
+				'permission_callback' => '__return_true',
+			) );
+
+
+
 			// Auth endpoints
 			register_rest_route( 'dodo-air/v1', '/auth/request-code', array(
 				'methods'  => 'POST',
@@ -189,6 +198,26 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				'callback' => array( $this, 'get_badge' ),
 				'permission_callback' => '__return_true',
 			) );
+
+			// Trades Endpoints
+			register_rest_route( 'dodo-air/v1', '/trades', array(
+				array(
+					'methods'  => 'GET',
+					'callback' => array( $this, 'get_trades' ),
+					'permission_callback' => '__return_true',
+				),
+				array(
+					'methods'  => 'POST',
+					'callback' => array( $this, 'add_trade' ),
+					'permission_callback' => '__return_true',
+				),
+			) );
+
+			register_rest_route( 'dodo-air/v1', '/trades/(?P<id>\d+)', array(
+				'methods'  => 'DELETE',
+				'callback' => array( $this, 'delete_trade' ),
+				'permission_callback' => '__return_true',
+			) );
 		} );
 
 		// Bypass nonce checks for all dodo-air endpoints so stale nonces (from open tabs) don't block API calls
@@ -209,6 +238,97 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 
 	private function update_data( $key, $data ) {
 		update_option( 'dodo_air_' . $key, $data );
+	}
+
+	private function fetch_cpt_json( $post_type ) {
+		$args = array(
+			'post_type'      => $post_type,
+			'post_status'    => 'publish',
+			'posts_per_page' => 150,
+			'orderby'        => 'date',
+			'order'          => 'DESC'
+		);
+		$query = new WP_Query( $args );
+		$results = array();
+		if ( $query->have_posts() ) {
+			foreach ( $query->posts as $post ) {
+				$meta = get_post_meta( $post->ID );
+				$item = array( 'id' => (string) $post->ID );
+				foreach ( $meta as $k => $v ) {
+					if ( strpos( $k, '_' ) !== 0 ) {
+						$item[ $k ] = maybe_unserialize( $v[0] );
+					}
+				}
+				if ( ! isset( $item['createdAt'] ) ) {
+					$item['createdAt'] = gmdate( 'Y-m-d\TH:i:s\Z', strtotime( $post->post_date_gmt ) );
+				}
+				if ( in_array($post_type, ['dodo_flight', 'dodo_dream']) && !isset($item['passengers']) ) {
+					$item['passengers'] = array();
+				}
+				$results[] = $item;
+			}
+		}
+		return $results;
+	}
+
+	private function insert_cpt_json( $post_type, $title, $data, $content = '' ) {
+		$post_id = wp_insert_post( array(
+			'post_title'   => sanitize_text_field( $title ),
+			'post_content' => wp_kses_post( $content ),
+			'post_type'    => $post_type,
+			'post_status'  => 'publish'
+		) );
+		
+		if ( is_wp_error( $post_id ) ) {
+			return $post_id;
+		}
+
+		$data['id'] = (string) $post_id;
+		if ( ! isset( $data['createdAt'] ) ) {
+			$data['createdAt'] = gmdate( 'Y-m-d\TH:i:s\Z' );
+		}
+
+		foreach ( $data as $k => $v ) {
+			if ( $k !== 'id' ) {
+				update_post_meta( $post_id, $k, $v );
+			}
+		}
+
+		return $data;
+	}
+	
+	private function update_cpt_json( $post_id, $data ) {
+		foreach ( $data as $k => $v ) {
+			if ( $k !== 'id' ) {
+				update_post_meta( $post_id, $k, $v );
+			}
+		}
+	}
+
+	private function get_cpt_item_json( $post_id ) {
+		$post = get_post( $post_id );
+		if ( ! $post || $post->post_status === 'trash' ) return null;
+		
+		$meta = get_post_meta( $post->ID );
+		$item = array( 'id' => (string) $post->ID );
+		foreach ( $meta as $k => $v ) {
+			if ( strpos( $k, '_' ) !== 0 ) {
+				$item[ $k ] = maybe_unserialize( $v[0] );
+			}
+		}
+		if ( ! isset( $item['createdAt'] ) ) {
+			$item['createdAt'] = gmdate( 'Y-m-d\TH:i:s\Z', strtotime( $post->post_date_gmt ) );
+		}
+		if ( $post->post_type === 'dodo_itinerary' && !isset( $item['passengers'] ) ) {
+			$item['passengers'] = array();
+		}
+		if ( $post->post_type === 'dodo_request' ) {
+			$item['message'] = $post->post_content;
+		}
+		if ( $post->post_type === 'dodo_trade' ) {
+			$item['description'] = $post->post_content;
+		}
+		return $item;
 	}
 
 	private function get_dynamic_profiles() {
@@ -286,7 +406,27 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				update_user_meta( $user_id, 'dodo_air_last_active', time() );
 			}
 
-			$user_schedules = get_user_meta( $user_id, '_dodo_air_schedules', true ) ?: array();
+			$args = array(
+				'post_type' => 'dodo_itinerary',
+				'meta_query' => array(
+					'relation' => 'AND',
+					array(
+						'key' => 'userId',
+						'value' => $user_id
+					),
+					array(
+						'key' => 'travelType',
+						'value' => 'SCHEDULE'
+					)
+				),
+				'posts_per_page' => 100
+			);
+			$query = new WP_Query($args);
+			if ($query->have_posts()) {
+				foreach ($query->posts as $post) {
+					$user_schedules[] = $this->get_cpt_item_json($post->ID);
+				}
+			}
 			
 			$user_passports = get_user_meta( $user_id, '_dodo_air_passports', true );
 			if ( ! is_array( $user_passports ) || empty( $user_passports ) ) {
@@ -348,11 +488,22 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
 		}
 		
+		$all_itineraries = $this->fetch_cpt_json( 'dodo_itinerary' );
+		$flights = array();
+		$dreams = array();
+		foreach ($all_itineraries as $it) {
+			if (isset($it['travelType']) && $it['travelType'] === 'LUNA') {
+				$dreams[] = $it;
+			} elseif (isset($it['travelType']) && $it['travelType'] === 'DAL') {
+				$flights[] = $it;
+			}
+		}
+
 		return new WP_REST_Response( array(
-			'flights'  => $this->get_data( 'flights' ),
-			'dreams'   => $this->get_data( 'dreams' ),
+			'flights'  => $flights,
+			'dreams'   => $dreams,
 			'chatter'  => $this->get_data( 'chatter' ),
-			'requests' => $this->get_data( 'requests' ),
+			'requests' => $this->fetch_cpt_json( 'dodo_request' ),
 			'profiles' => $this->get_dynamic_profiles(),
 			'mySchedules' => $user_schedules,
 			'myPassports' => isset($user_passports) ? $user_passports : array(),
@@ -373,8 +524,29 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	public function get_schedules( $request ) {
 		$user_id = get_current_user_id();
 		if ( ! $user_id ) return new WP_REST_Response( array(), 200 );
-		$schedules = get_user_meta( $user_id, '_dodo_air_schedules', true );
-		return new WP_REST_Response( empty( $schedules ) ? array() : $schedules, 200 );
+		$args = array(
+			'post_type' => 'dodo_itinerary',
+			'meta_query' => array(
+				'relation' => 'AND',
+				array(
+					'key' => 'userId',
+					'value' => $user_id
+				),
+				array(
+					'key' => 'travelType',
+					'value' => 'SCHEDULE'
+				)
+			),
+			'posts_per_page' => 100
+		);
+		$query = new WP_Query($args);
+		$schedules = array();
+		if ($query->have_posts()) {
+			foreach ($query->posts as $post) {
+				$schedules[] = $this->get_cpt_item_json($post->ID);
+			}
+		}
+		return new WP_REST_Response( $schedules, 200 );
 	}
 
 	public function add_schedule( $request ) {
@@ -382,15 +554,13 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
 		
 		$params = $request->get_json_params();
-		$schedules = get_user_meta( $user_id, '_dodo_air_schedules', true );
-		if ( empty( $schedules ) ) $schedules = array();
+		$params['userId'] = $user_id;
+		$params['travelType'] = 'SCHEDULE';
+		$islandName = isset($params['islandName']) ? $params['islandName'] : 'Unknown Island';
+		$time = isset($params['time']) ? $params['time'] : 'Future';
 		
-		$newSchedule = array_merge( $params, array(
-			'id' => 'sch-' . time() . rand(100, 999),
-		) );
-		
-		$schedules[] = $newSchedule;
-		update_user_meta( $user_id, '_dodo_air_schedules', $schedules );
+		$title = sprintf('SCHEDULE to %s - %s', $islandName, $time);
+		$newSchedule = $this->insert_cpt_json( 'dodo_itinerary', $title, $params );
 		return new WP_REST_Response( $newSchedule, 200 );
 	}
 
@@ -399,14 +569,11 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		if ( ! $user_id ) return new WP_Error( 'unauthorized', 'Must be logged in.', array( 'status' => 401 ) );
 		
 		$id = $request->get_param( 'id' );
-		$schedules = get_user_meta( $user_id, '_dodo_air_schedules', true );
-		if ( empty( $schedules ) ) $schedules = array();
+		$sched = $this->get_cpt_item_json($id);
+		if ($sched && isset($sched['userId']) && $sched['userId'] == $user_id) {
+			wp_trash_post( $id );
+		}
 		
-		$schedules = array_values( array_filter( $schedules, function( $s ) use ( $id ) {
-			return $s['id'] !== $id;
-		} ) );
-		
-		update_user_meta( $user_id, '_dodo_air_schedules', $schedules );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -489,80 +656,59 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 
 	public function add_request( $request ) {
 		$params = $request->get_json_params();
-		$requests = $this->get_data( 'requests' );
-		
-		$newReq = array_merge( $params, array(
-			'id' => 'req-' . time(),
-			'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-		) );
-		
-		array_unshift( $requests, $newReq );
-		$this->update_data( 'requests', $requests );
-		
+		$title = isset($params['authorName']) ? $params['authorName'] . ' Request' : 'New Request';
+		$content = isset($params['message']) ? $params['message'] : '';
+		unset($params['message']);
+		$newReq = $this->insert_cpt_json( 'dodo_request', $title, $params, $content );
 		return new WP_REST_Response( $newReq, 200 );
 	}
 
 	public function delete_request( $request ) {
 		$id = $request->get_param( 'id' );
-		$requests = $this->get_data( 'requests' );
-		
-		$requests = array_filter( $requests, function( $r ) use ( $id ) {
-			return $r['id'] !== $id;
-		} );
-		
-		$this->update_data( 'requests', array_values( $requests ) );
+		wp_trash_post( $id );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
 	public function add_flight( $request ) {
 		$params = $request->get_json_params();
-		$flights = $this->get_data( 'flights' );
-		
 		$flightNumber = isset($params['flightNumber']) && !empty($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
 		$milesCost = isset($params['milesCost']) ? (int) $params['milesCost'] : 0;
+		$islandName = isset($params['islandName']) ? $params['islandName'] : 'Unknown Island';
+		$gate = isset($params['gate']) ? $params['gate'] : 'X';
+		
+		$title = sprintf('DAL to %s (Gate: %s) - %s', $islandName, $gate, $flightNumber);
 
-		$existing_index = -1;
-		foreach ( $flights as $index => $f ) {
-			if ( isset($f['flightNumber']) && $f['flightNumber'] === $flightNumber ) {
-				$existing_index = $index;
-				break;
-			}
-		}
+		$args = array(
+			'post_type' => 'dodo_itinerary',
+			'meta_key' => 'flightNumber',
+			'meta_value' => $flightNumber,
+			'posts_per_page' => 1
+		);
+		$query = new WP_Query($args);
 
-		if ( $existing_index !== -1 ) {
-			$newFlight = array_merge( $flights[$existing_index], $params, array(
-				'status' => 'Scheduled',
-				'passengers' => array(),
-				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				'milesCost' => $milesCost
-			) );
-			
-			array_splice( $flights, $existing_index, 1 );
-			array_unshift( $flights, $newFlight );
-			
-			$this->internal_add_chatter( 'Orville', 'Attention! Flight ' . (isset($newFlight['flightNumber']) ? $newFlight['flightNumber'] : $newFlight['id']) . ' to ' . $newFlight['islandName'] . ' is back online and accepting passengers at Gate ' . $newFlight['gate'] . '.' );
+		$data = array_merge($params, array(
+			'flightNumber' => $flightNumber,
+			'status' => 'Scheduled',
+			'passengers' => array(),
+			'milesCost' => $milesCost,
+			'travelType' => 'DAL'
+		));
+
+		if ( $query->have_posts() ) {
+			$post_id = $query->posts[0]->ID;
+			$data['id'] = (string) $post_id;
+			$data['createdAt'] = gmdate( 'Y-m-d\TH:i:s\Z' );
+			$this->update_cpt_json( $post_id, $data );
+			wp_update_post(array('ID' => $post_id, 'post_title' => $title));
+			$this->internal_add_chatter( 'Orville', 'Attention! Flight ' . $flightNumber . ' to ' . $params['islandName'] . ' is back online and accepting passengers at Gate ' . $params['gate'] . '.' );
+			$newFlight = $this->get_cpt_item_json( $post_id );
 		} else {
-			$flightId = 'fl-' . uniqid() . '-' . rand(100, 999);
-			$newFlight = array_merge( $params, array(
-				'id' => $flightId,
-				'flightNumber' => $flightNumber,
-				'status' => 'Scheduled',
-				'passengers' => array(),
-				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				'milesCost' => $milesCost
-			) );
-			
-			array_unshift( $flights, $newFlight );
-			
+			$newFlight = $this->insert_cpt_json( 'dodo_itinerary', $title, $data );
 			$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
-			$alltime_pilots++;
-			update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
-			
-			$this->internal_add_chatter( 'Orville', 'Attention! New flight ' . (isset($newFlight['flightNumber']) ? $newFlight['flightNumber'] : $newFlight['id']) . ' to ' . $newFlight['islandName'] . ' is now accepting passengers at Gate ' . $newFlight['gate'] . '.' );
+			update_option( 'dodo_air_alltime_pilots', ++$alltime_pilots );
+			$this->internal_add_chatter( 'Orville', 'Attention! New flight ' . $flightNumber . ' to ' . $params['islandName'] . ' is now accepting passengers at Gate ' . $params['gate'] . '.' );
 		}
-		
-		$this->update_data( 'flights', $flights );
-		
+
 		$user_id = get_current_user_id();
 		if ( $user_id ) {
 			do_action( 'xophz_compass_record_action', 'dal_hosted_flight', $user_id, array() );
@@ -576,19 +722,17 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$status = $params['status'];
 		
-		$flights = $this->get_data( 'flights' );
-		foreach ( $flights as &$f ) {
-			if ( $f['id'] === $id ) {
-				$f['status'] = $status;
-				if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
-					$f['dodoCode'] = $params['dodoCode'];
-				}
-				$this->internal_add_chatter( 'Orville', 'Update for Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . ': Status changed to ' . strtoupper( $status ) . '.' );
-				break;
+		$f = $this->get_cpt_item_json( $id );
+		if ( $f ) {
+			$f['status'] = $status;
+			if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
+				$f['dodoCode'] = $params['dodoCode'];
 			}
+			$this->update_cpt_json( $id, array('status' => $f['status'], 'dodoCode' => $f['dodoCode'] ?? '') );
+			$flightNumber = isset($f['flightNumber']) ? $f['flightNumber'] : $id;
+			$this->internal_add_chatter( 'Orville', 'Update for Flight ' . $flightNumber . ': Status changed to ' . strtoupper( $status ) . '.' );
 		}
 		
-		$this->update_data( 'flights', $flights );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -597,62 +741,60 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$user_id = get_current_user_id();
 		
-		$flights = $this->get_data( 'flights' );
-		foreach ( $flights as &$f ) {
-			if ( $f['id'] === $id ) {
-				$milesCost = isset($f['milesCost']) ? (int) $f['milesCost'] : 0;
+		$f = $this->get_cpt_item_json( $id );
+		if ( $f ) {
+			$milesCost = isset($f['milesCost']) ? (int) $f['milesCost'] : 0;
+			
+			if ($milesCost > 0 && $user_id) {
+				$passenger_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+				if ( $passenger_miles < $milesCost ) {
+					return new WP_Error( 'not_enough_miles', 'Not enough miles to board this flight.', array( 'status' => 400 ) );
+				}
+				update_user_meta( $user_id, '_xp_total_gp', $passenger_miles - $milesCost );
 				
-				if ($milesCost > 0 && $user_id) {
-					$passenger_miles = (int) get_user_meta( $user_id, '_xp_total_gp', true );
-					if ( $passenger_miles < $milesCost ) {
-						return new WP_Error( 'not_enough_miles', 'Not enough miles to board this flight.', array( 'status' => 400 ) );
-					}
-					update_user_meta( $user_id, '_xp_total_gp', $passenger_miles - $milesCost );
-					
-					$host_friendCode = isset($f['hostFriendCode']) ? $f['hostFriendCode'] : null;
-					$host_userId = isset($f['hostUserId']) ? $f['hostUserId'] : null;
-					
-					if ( $host_userId ) {
-						$host_miles = (int) get_user_meta( $host_userId, '_xp_total_gp', true );
-						update_user_meta( $host_userId, '_xp_total_gp', $host_miles + $milesCost );
-					} elseif ( $host_friendCode ) {
-						$users = get_users(array(
-							'meta_key' => '_dodo_air_passport',
-							'meta_compare' => 'EXISTS'
-						));
-						foreach( $users as $u ) {
-							$p = get_user_meta( $u->ID, '_dodo_air_passport', true );
-							if ( isset($p['friendCode']) && $p['friendCode'] === $host_friendCode ) {
-								$host_miles = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
-								update_user_meta( $u->ID, '_xp_total_gp', $host_miles + $milesCost );
-								break;
-							}
+				$host_friendCode = isset($f['hostFriendCode']) ? $f['hostFriendCode'] : null;
+				$host_userId = isset($f['hostUserId']) ? $f['hostUserId'] : null;
+				
+				if ( $host_userId ) {
+					$host_miles = (int) get_user_meta( $host_userId, '_xp_total_gp', true );
+					update_user_meta( $host_userId, '_xp_total_gp', $host_miles + $milesCost );
+				} elseif ( $host_friendCode ) {
+					$users = get_users(array(
+						'meta_key' => '_dodo_air_passport',
+						'meta_compare' => 'EXISTS'
+					));
+					foreach( $users as $u ) {
+						$p = get_user_meta( $u->ID, '_dodo_air_passport', true );
+						if ( isset($p['friendCode']) && $p['friendCode'] === $host_friendCode ) {
+							$host_miles = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
+							update_user_meta( $u->ID, '_xp_total_gp', $host_miles + $milesCost );
+							break;
 						}
 					}
 				}
+			}
 
-				if ( ! isset( $f['passengers'] ) ) {
-					$f['passengers'] = array();
-				}
-				$f['passengers'][] = array_merge( $params, array(
-					'id' => 'p-' . time(),
-					'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				) );
-				
-				$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
-				$alltime_passengers++;
-				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
-				
-				$this->internal_add_chatter( 'Orville', $params['name'] . ' just boarded Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . ' to ' . $f['islandName'] . '!' );
-				
-				if ( $user_id ) {
-					do_action( 'xophz_compass_record_action', 'dal_boarded_flight', $user_id, array() );
-				}
-				break;
+			if ( ! isset( $f['passengers'] ) ) {
+				$f['passengers'] = array();
+			}
+			$f['passengers'][] = array_merge( $params, array(
+				'id' => 'p-' . time(),
+				'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+			) );
+			
+			$this->update_cpt_json( $id, array( 'passengers' => $f['passengers'] ) );
+			
+			$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+			update_option( 'dodo_air_alltime_passengers', ++$alltime_passengers );
+			
+			$flightNumber = isset($f['flightNumber']) ? $f['flightNumber'] : $id;
+			$this->internal_add_chatter( 'Orville', $params['name'] . ' just boarded Flight ' . $flightNumber . ' to ' . $f['islandName'] . '!' );
+			
+			if ( $user_id ) {
+				do_action( 'xophz_compass_record_action', 'dal_boarded_flight', $user_id, array() );
 			}
 		}
 		
-		$this->update_data( 'flights', $flights );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -661,79 +803,66 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$passengerId = $params['passengerId'];
 		
-		$flights = $this->get_data( 'flights' );
-		foreach ( $flights as &$f ) {
-			if ( $f['id'] === $id && isset( $f['passengers'] ) ) {
-				$p = null;
-				foreach ( $f['passengers'] as $key => $pass ) {
-					if ( $pass['id'] === $passengerId ) {
-						$p = $pass;
-						unset( $f['passengers'][$key] );
-						break;
-					}
+		$f = $this->get_cpt_item_json( $id );
+		if ( $f && isset( $f['passengers'] ) ) {
+			$p = null;
+			foreach ( $f['passengers'] as $key => $pass ) {
+				if ( $pass['id'] === $passengerId ) {
+					$p = $pass;
+					unset( $f['passengers'][$key] );
+					break;
 				}
-				if ( $p ) {
-					$f['passengers'] = array_values( $f['passengers'] );
-					$this->internal_add_chatter( 'Orville', $p['name'] . ' left Flight ' . (isset($f['flightNumber']) ? $f['flightNumber'] : $id) . '.' );
-				}
-				break;
+			}
+			if ( $p ) {
+				$f['passengers'] = array_values( $f['passengers'] );
+				$this->update_cpt_json( $id, array( 'passengers' => $f['passengers'] ) );
+				$flightNumber = isset($f['flightNumber']) ? $f['flightNumber'] : $id;
+				$this->internal_add_chatter( 'Orville', $p['name'] . ' left Flight ' . $flightNumber . '.' );
 			}
 		}
 		
-		$this->update_data( 'flights', $flights );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
 	public function add_dream( $request ) {
 		$params = $request->get_json_params();
-		$dreams = $this->get_data( 'dreams' );
-		
 		$baseNumber = isset($params['flightNumber']) && !empty($params['flightNumber']) ? $params['flightNumber'] : ('DAL-' . rand(1000,9999));
 		$dreamNumber = str_replace('DAL-', 'LUL-', $baseNumber);
+		$islandName = isset($params['islandName']) ? $params['islandName'] : 'Unknown Island';
+		$gate = isset($params['gate']) ? $params['gate'] : 'X';
+		
+		$title = sprintf('LUNA to %s (Gate: %s) - %s', $islandName, $gate, $dreamNumber);
 
-		$existing_index = -1;
-		foreach ( $dreams as $index => $d ) {
-			if ( isset($d['flightNumber']) && $d['flightNumber'] === $dreamNumber ) {
-				$existing_index = $index;
-				break;
-			}
-		}
+		$args = array(
+			'post_type' => 'dodo_itinerary',
+			'meta_key' => 'flightNumber',
+			'meta_value' => $dreamNumber,
+			'posts_per_page' => 1
+		);
+		$query = new WP_Query($args);
 
-		if ( $existing_index !== -1 ) {
-			$newDream = array_merge( $dreams[$existing_index], $params, array(
-				'flightNumber' => $dreamNumber,
-				'status' => 'Scheduled',
-				'passengers' => array(),
-				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				'travelType' => 'LUNA'
-			) );
-			
-			array_splice( $dreams, $existing_index, 1 );
-			array_unshift( $dreams, $newDream );
-			
-			$this->internal_add_chatter( 'Luna', 'Ah, the dream returns... Dream ' . $dreamNumber . ' at ' . $newDream['islandName'] . ' is once again accessible for dreamers.' );
+		$data = array_merge($params, array(
+			'flightNumber' => $dreamNumber,
+			'status' => 'Scheduled',
+			'passengers' => array(),
+			'travelType' => 'LUNA'
+		));
+
+		if ( $query->have_posts() ) {
+			$post_id = $query->posts[0]->ID;
+			$data['id'] = (string) $post_id;
+			$data['createdAt'] = gmdate( 'Y-m-d\TH:i:s\Z' );
+			$this->update_cpt_json( $post_id, $data );
+			wp_update_post(array('ID' => $post_id, 'post_title' => $title));
+			$this->internal_add_chatter( 'Luna', 'Ah, the dream returns... Dream ' . $dreamNumber . ' at ' . $params['islandName'] . ' is once again accessible for dreamers.' );
+			$newDream = $this->get_cpt_item_json( $post_id );
 		} else {
-			$dreamId = 'dr-' . uniqid() . '-' . rand(100, 999);
-			$newDream = array_merge( $params, array(
-				'id' => $dreamId,
-				'flightNumber' => $dreamNumber,
-				'status' => 'Scheduled',
-				'passengers' => array(),
-				'createdAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				'travelType' => 'LUNA'
-			) );
-			
-			array_unshift( $dreams, $newDream );
-			
+			$newDream = $this->insert_cpt_json( 'dodo_itinerary', $title, $data );
 			$alltime_pilots = (int) get_option( 'dodo_air_alltime_pilots', 0 );
-			$alltime_pilots++;
-			update_option( 'dodo_air_alltime_pilots', $alltime_pilots );
-			
-			$this->internal_add_chatter( 'Luna', 'Ah, a new dream has formed... Dream ' . $dreamNumber . ' at ' . $newDream['islandName'] . ' is now accessible for dreamers.' );
+			update_option( 'dodo_air_alltime_pilots', ++$alltime_pilots );
+			$this->internal_add_chatter( 'Luna', 'Ah, a new dream has formed... Dream ' . $dreamNumber . ' at ' . $params['islandName'] . ' is now accessible for dreamers.' );
 		}
-		
-		$this->update_data( 'dreams', $dreams );
-		
+
 		return new WP_REST_Response( $newDream, 200 );
 	}
 
@@ -742,19 +871,17 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$status = $params['status'];
 		
-		$dreams = $this->get_data( 'dreams' );
-		foreach ( $dreams as &$d ) {
-			if ( $d['id'] === $id ) {
-				$d['status'] = $status;
-				if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
-					$d['dodoCode'] = $params['dodoCode'];
-				}
-				$this->internal_add_chatter( 'Luna', 'Dream ' . (isset($d['flightNumber']) ? $d['flightNumber'] : $id) . ' status is now ' . strtoupper( $status ) . '.' );
-				break;
+		$d = $this->get_cpt_item_json( $id );
+		if ( $d ) {
+			$d['status'] = $status;
+			if ( isset( $params['dodoCode'] ) && !empty( $params['dodoCode'] ) ) {
+				$d['dodoCode'] = $params['dodoCode'];
 			}
+			$this->update_cpt_json( $id, array('status' => $d['status'], 'dodoCode' => $d['dodoCode'] ?? '') );
+			$dreamNumber = isset($d['flightNumber']) ? $d['flightNumber'] : $id;
+			$this->internal_add_chatter( 'Luna', 'Dream ' . $dreamNumber . ' status is now ' . strtoupper( $status ) . '.' );
 		}
 		
-		$this->update_data( 'dreams', $dreams );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -762,27 +889,24 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$id = $request->get_param( 'id' );
 		$params = $request->get_json_params();
 		
-		$dreams = $this->get_data( 'dreams' );
-		foreach ( $dreams as &$d ) {
-			if ( $d['id'] === $id ) {
-				if ( ! isset( $d['passengers'] ) ) {
-					$d['passengers'] = array();
-				}
-				$d['passengers'][] = array_merge( $params, array(
-					'id' => 'd-' . time(),
-					'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
-				) );
-				
-				$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
-				$alltime_passengers++;
-				update_option( 'dodo_air_alltime_passengers', $alltime_passengers );
-				
-				$this->internal_add_chatter( 'Luna', $params['name'] . ' has drifted into the dream of ' . $d['islandName'] . '...' );
-				break;
+		$d = $this->get_cpt_item_json( $id );
+		if ( $d ) {
+			if ( ! isset( $d['passengers'] ) ) {
+				$d['passengers'] = array();
 			}
+			$d['passengers'][] = array_merge( $params, array(
+				'id' => 'd-' . time(),
+				'checkedInAt' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+			) );
+			
+			$this->update_cpt_json( $id, array('passengers' => $d['passengers']) );
+			
+			$alltime_passengers = (int) get_option( 'dodo_air_alltime_passengers', 0 );
+			update_option( 'dodo_air_alltime_passengers', ++$alltime_passengers );
+			
+			$this->internal_add_chatter( 'Luna', $params['name'] . ' has drifted into the dream of ' . $d['islandName'] . '...' );
 		}
 		
-		$this->update_data( 'dreams', $dreams );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -791,26 +915,24 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		$params = $request->get_json_params();
 		$passengerId = $params['passengerId'];
 		
-		$dreams = $this->get_data( 'dreams' );
-		foreach ( $dreams as &$d ) {
-			if ( $d['id'] === $id && isset( $d['passengers'] ) ) {
-				$p = null;
-				foreach ( $d['passengers'] as $key => $pass ) {
-					if ( $pass['id'] === $passengerId ) {
-						$p = $pass;
-						unset( $d['passengers'][$key] );
-						break;
-					}
+		$d = $this->get_cpt_item_json( $id );
+		if ( $d && isset( $d['passengers'] ) ) {
+			$p = null;
+			foreach ( $d['passengers'] as $key => $pass ) {
+				if ( $pass['id'] === $passengerId ) {
+					$p = $pass;
+					unset( $d['passengers'][$key] );
+					break;
 				}
-				if ( $p ) {
-					$d['passengers'] = array_values( $d['passengers'] );
-					$this->internal_add_chatter( 'Luna', $p['name'] . ' has awoken from the dream of ' . (isset($d['flightNumber']) ? $d['flightNumber'] : $id) . '.' );
-				}
-				break;
+			}
+			if ( $p ) {
+				$d['passengers'] = array_values( $d['passengers'] );
+				$this->update_cpt_json( $id, array('passengers' => $d['passengers']) );
+				$dreamNumber = isset($d['flightNumber']) ? $d['flightNumber'] : $id;
+				$this->internal_add_chatter( 'Luna', $p['name'] . ' has awoken from the dream of ' . $dreamNumber . '.' );
 			}
 		}
 		
-		$this->update_data( 'dreams', $dreams );
 		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
@@ -1177,6 +1299,81 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		), 200 );
 	}
 
+	public function nookipedia_search( $request ) {
+		$query = $request->get_param( 'q' );
+
+		if ( empty( $query ) || strlen( $query ) < 2 ) {
+			return new WP_REST_Response( array(), 200 );
+		}
+
+		$mw_api_url = 'https://nookipedia.com/w/api.php';
+		$capitalized_query = ucfirst( strtolower( $query ) );
+		$lower_query = strtolower( $query );
+
+		// 1. Fetch Villagers
+		$villager_params = array(
+			'action' => 'cargoquery',
+			'format' => 'json',
+			'tables' => 'villager',
+			'fields' => 'name, image_url',
+			'where'  => 'name LIKE "%' . $capitalized_query . '%" OR name LIKE "%' . $lower_query . '%"',
+			'limit'  => '20',
+		);
+		
+		$villager_url = add_query_arg( $villager_params, $mw_api_url );
+		$villager_res = wp_remote_get( $villager_url, array( 'timeout' => 15 ) );
+
+		// 2. Fetch Items
+		$item_params = array(
+			'action' => 'cargoquery',
+			'format' => 'json',
+			'tables' => 'nh_item',
+			'fields' => 'en_name=name, image_url',
+			'where'  => 'en_name LIKE "%' . $capitalized_query . '%" OR en_name LIKE "%' . $lower_query . '%"',
+			'limit'  => '20',
+		);
+
+		$item_url = add_query_arg( $item_params, $mw_api_url );
+		$item_res = wp_remote_get( $item_url, array( 'timeout' => 15 ) );
+
+		$results = array();
+
+		if ( ! is_wp_error( $villager_res ) && wp_remote_retrieve_response_code( $villager_res ) === 200 ) {
+			$body = wp_remote_retrieve_body( $villager_res );
+			$data = json_decode( $body, true );
+			if ( ! empty( $data['cargoquery'] ) ) {
+				foreach ( $data['cargoquery'] as $row ) {
+					$title = $row['title'];
+					$results[] = array(
+						'name'     => $title['name'],
+						'imageUrl' => isset( $title['image_url'] ) ? $title['image_url'] : '',
+						'category' => 'villager',
+					);
+				}
+			}
+		}
+
+		if ( ! is_wp_error( $item_res ) && wp_remote_retrieve_response_code( $item_res ) === 200 ) {
+			$body = wp_remote_retrieve_body( $item_res );
+			$data = json_decode( $body, true );
+			if ( ! empty( $data['cargoquery'] ) ) {
+				foreach ( $data['cargoquery'] as $row ) {
+					$title = $row['title'];
+					$results[] = array(
+						'name'     => $title['name'],
+						'imageUrl' => isset( $title['image_url'] ) ? $title['image_url'] : '',
+						'category' => 'item',
+					);
+				}
+			}
+		}
+
+		// Return top 20 results combined
+		$results = array_slice( $results, 0, 20 );
+
+		return new WP_REST_Response( $results, 200 );
+	}
+
 	public function auth_logout( $request ) {
 		wp_logout();
 		return new WP_REST_Response( array( 'success' => true ), 200 );
@@ -1253,5 +1450,106 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			'message' => $message,
 			'color' => $color,
 		), 200 );
+	}
+
+	public function get_trades( $request ) {
+		$args = array(
+			'post_type' => 'dodo_trade',
+			'post_status' => 'publish',
+			'posts_per_page' => 100,
+			'meta_query' => array(
+				'relation' => 'OR',
+				array(
+					'key' => 'status',
+					'compare' => '!=',
+					'value' => 'canceled'
+				),
+				array(
+					'key' => 'status',
+					'compare' => 'NOT EXISTS'
+				)
+			)
+		);
+		$query = new WP_Query( $args );
+		$trades = array();
+
+		if ( $query->have_posts() ) {
+			foreach ( $query->posts as $post ) {
+				$lf = get_post_meta( $post->ID, 'lfItems', true );
+				$ft = get_post_meta( $post->ID, 'ftItems', true );
+				$trades[] = array(
+					'id' => (string) $post->ID,
+					'authorId' => get_post_meta( $post->ID, 'authorId', true ),
+					'authorName' => get_post_meta( $post->ID, 'authorName', true ),
+					'authorIsland' => get_post_meta( $post->ID, 'authorIsland', true ),
+					'authorAvatar' => get_post_meta( $post->ID, 'authorAvatar', true ),
+					'travelPreference' => get_post_meta( $post->ID, 'travelPreference', true ),
+					'status' => get_post_meta( $post->ID, 'status', true ) ?: 'open',
+					'description' => $post->post_content,
+					'createdAt' => get_post_meta( $post->ID, 'createdAt', true ) ?: $post->post_date,
+					'lfItems' => is_array( $lf ) ? $lf : array(),
+					'ftItems' => is_array( $ft ) ? $ft : array(),
+				);
+			}
+		}
+
+		return new WP_REST_Response( $trades, 200 );
+	}
+
+	public function add_trade( $request ) {
+		$params = $request->get_json_params();
+
+		$post_id = wp_insert_post( array(
+			'post_title' => sanitize_text_field( $params['authorName'] ?? 'Unknown' ) . ' Trading Post',
+			'post_content' => wp_kses_post( $params['description'] ?? '' ),
+			'post_type' => 'dodo_trade',
+			'post_status' => 'publish'
+		) );
+
+		if ( is_wp_error( $post_id ) ) {
+			return new WP_Error( 'create_failed', 'Failed to create trade listing', array( 'status' => 500 ) );
+		}
+
+		$created_at = gmdate( 'Y-m-d\TH:i:s\Z' );
+
+		update_post_meta( $post_id, 'authorId', sanitize_text_field( $params['authorId'] ?? '' ) );
+		update_post_meta( $post_id, 'authorName', sanitize_text_field( $params['authorName'] ?? '' ) );
+		update_post_meta( $post_id, 'authorIsland', sanitize_text_field( $params['authorIsland'] ?? '' ) );
+		update_post_meta( $post_id, 'authorAvatar', sanitize_text_field( $params['authorAvatar'] ?? '' ) );
+		update_post_meta( $post_id, 'travelPreference', sanitize_text_field( $params['travelPreference'] ?? 'flexible' ) );
+		update_post_meta( $post_id, 'status', 'open' );
+		update_post_meta( $post_id, 'createdAt', $created_at );
+		update_post_meta( $post_id, 'lfItems', $params['lfItems'] ?? array() );
+		update_post_meta( $post_id, 'ftItems', $params['ftItems'] ?? array() );
+
+		$new_trade = array(
+			'id' => (string) $post_id,
+			'authorId' => $params['authorId'] ?? '',
+			'authorName' => $params['authorName'] ?? '',
+			'authorIsland' => $params['authorIsland'] ?? '',
+			'authorAvatar' => $params['authorAvatar'] ?? '',
+			'travelPreference' => $params['travelPreference'] ?? 'flexible',
+			'status' => 'open',
+			'description' => $params['description'] ?? '',
+			'createdAt' => $created_at,
+			'lfItems' => $params['lfItems'] ?? array(),
+			'ftItems' => $params['ftItems'] ?? array(),
+		);
+
+		return new WP_REST_Response( $new_trade, 200 );
+	}
+
+	public function delete_trade( $request ) {
+		$id = (int) $request->get_param( 'id' );
+		if ( ! $id ) {
+			return new WP_Error( 'invalid_id', 'Invalid listing ID', array( 'status' => 400 ) );
+		}
+
+		// Soft delete by updating status
+		update_post_meta( $id, 'status', 'canceled' );
+		// Or move to trash:
+		wp_trash_post( $id );
+
+		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 }
