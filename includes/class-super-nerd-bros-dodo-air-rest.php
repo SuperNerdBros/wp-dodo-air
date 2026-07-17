@@ -332,51 +332,44 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 	}
 
 	private function get_dynamic_profiles() {
-		$profiles = get_transient( 'dodo_air_dynamic_profiles_v2' );
+		$profiles = get_transient( 'dodo_air_dynamic_profiles_v3' );
 		if ( false !== $profiles ) {
 			return $profiles;
 		}
 
-		$all_users = get_users();
+		$args = array(
+			'post_type'      => 'nook_passport',
+			'posts_per_page' => -1,
+			'post_status'    => 'publish',
+		);
+		$query = new WP_Query( $args );
 		$profiles = array();
 
-		foreach ( $all_users as $u ) {
-			$passports = get_user_meta( $u->ID, '_dodo_air_passports', true );
-			
-			if ( ! is_array( $passports ) || empty( $passports ) ) {
-				$passport = get_user_meta( $u->ID, '_dodo_air_passport', true );
-				if ( ! is_array( $passport ) ) {
-					$passport = array(
-						'villagerName' => $u->display_name,
-						'islandName' => 'Unknown Island',
-						'titlePart1' => 'Freshly Picked',
-						'titlePart2' => 'Islander',
-						'avatarIcon' => '🦤',
-						'signature' => 'Wings up!',
-						'colorIndex' => 1,
-						'hasCreated' => false,
-					);
+		if ( $query->have_posts() ) {
+			foreach ( $query->posts as $post ) {
+				$u_id = $post->post_author;
+				$meta = get_post_meta( $post->ID );
+				$passport = array();
+				foreach ( $meta as $k => $v ) {
+					if ( strpos( $k, '_nook_passport_' ) === 0 ) {
+						$passport[ str_replace( '_nook_passport_', '', $k ) ] = maybe_unserialize( $v[0] );
+					}
 				}
-				$passports = array( $passport );
-			}
-
-			foreach ( $passports as $index => $passport ) {
-				// Ensure everyone has at least an empty friendCode so Svelte doesn't get duplicate undefined keys
-				if ( ! isset( $passport['friendCode'] ) ) {
-					$passport['friendCode'] = 'SW-0000-0000-' . str_pad($u->ID, 4, '0', STR_PAD_LEFT) . '-' . $index;
-				}
-
-				$passport['userId'] = (string) $u->ID;
-				$passport['passportIndex'] = $index;
-				$passport['xp'] = (int) get_user_meta( $u->ID, '_xp_total_xp', true );
-				$passport['miles'] = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
 				
-				// Get ratings
-				$passport['goodApples'] = (int) get_user_meta( $u->ID, 'dodo_air_good_apples', true );
-				$passport['rottenTurnips'] = (int) get_user_meta( $u->ID, 'dodo_air_rotten_turnips', true );
+				$index = isset($passport['passportIndex']) ? $passport['passportIndex'] : 0;
+				if ( ! isset( $passport['friendCode'] ) ) {
+					$passport['friendCode'] = '';
+				}
 
-				// Dream Z-ratings (per-passport)
-				$dream_ratings_raw = get_user_meta( $u->ID, 'dodo_air_dream_ratings_' . $index, true );
+				$passport['userId'] = (string) $u_id;
+				$passport['passportIndex'] = $index;
+				$passport['xp'] = (int) get_user_meta( $u_id, '_xp_total_xp', true );
+				$passport['miles'] = (int) get_user_meta( $u_id, '_xp_total_gp', true );
+				
+				$passport['goodApples'] = (int) get_user_meta( $u_id, 'dodo_air_good_apples', true );
+				$passport['rottenTurnips'] = (int) get_user_meta( $u_id, 'dodo_air_rotten_turnips', true );
+
+				$dream_ratings_raw = get_user_meta( $u_id, 'dodo_air_dream_ratings_' . $index, true );
 				$dream_ratings = is_array( $dream_ratings_raw ) ? $dream_ratings_raw : array();
 				$passport['dreamRatingCount'] = count( $dream_ratings );
 				if ( $passport['dreamRatingCount'] > 0 ) {
@@ -386,11 +379,11 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					$passport['dreamRatingAvg'] = 0;
 				}
 				
-				$profiles[ $u->ID . '_' . $index ] = $passport;
+				$profiles[ $u_id . '_' . $index ] = $passport;
 			}
 		}
 
-		set_transient( 'dodo_air_dynamic_profiles_v2', $profiles, 300 );
+		set_transient( 'dodo_air_dynamic_profiles_v3', $profiles, 300 );
 		return $profiles;
 	}
 
@@ -428,17 +421,31 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 				}
 			}
 			
-			$user_passports = get_user_meta( $user_id, '_dodo_air_passports', true );
-			if ( ! is_array( $user_passports ) || empty( $user_passports ) ) {
-				$single = get_user_meta( $user_id, '_dodo_air_passport', true );
-				$user_passports = is_array( $single ) ? array( $single ) : array();
+			$user_passports = array();
+			$args = array(
+				'post_type'      => 'nook_passport',
+				'author'         => $user_id,
+				'posts_per_page' => -1,
+				'post_status'    => 'publish',
+				'orderby'        => 'date',
+				'order'          => 'ASC'
+			);
+			$query = new WP_Query($args);
+			if ( $query->have_posts() ) {
+				foreach ( $query->posts as $post ) {
+					$meta = get_post_meta( $post->ID );
+					$p = array();
+					foreach ( $meta as $k => $v ) {
+						if ( strpos( $k, '_nook_passport_' ) === 0 ) {
+							$p[ str_replace( '_nook_passport_', '', $k ) ] = maybe_unserialize( $v[0] );
+						}
+					}
+					$p['id'] = $post->ID;
+					$p['xp'] = (int) get_user_meta( $user_id, '_xp_total_xp', true );
+					$p['miles'] = (int) get_user_meta( $user_id, '_xp_total_gp', true );
+					$user_passports[] = $p;
+				}
 			}
-
-			foreach ( $user_passports as &$p ) {
-				$p['xp'] = (int) get_user_meta( $user_id, '_xp_total_xp', true );
-				$p['miles'] = (int) get_user_meta( $user_id, '_xp_total_gp', true );
-			}
-			unset($p);
 			$user_passport = empty( $user_passports ) ? array() : $user_passports[0];
 		}
 		
@@ -593,22 +600,49 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 		// Handle array of passports format
 		if ( isset( $params['passports'] ) && is_array( $params['passports'] ) ) {
 			$passports = $params['passports'];
-			foreach ( $passports as &$p ) {
+			
+			$args = array(
+				'post_type'      => 'nook_passport',
+				'author'         => $user_id,
+				'posts_per_page' => -1,
+				'post_status'    => 'publish',
+				'orderby'        => 'date',
+				'order'          => 'ASC'
+			);
+			$query = new WP_Query($args);
+			$existing_posts = $query->posts;
+
+			foreach ( $passports as $index => &$p ) {
 				if ( empty( $p['flightNumber'] ) ) {
 					$p['flightNumber'] = $this->generate_flight_number();
 				}
+				$p['passportIndex'] = $index;
+
+				$post_id = 0;
+				if ( isset($existing_posts[$index]) ) {
+					$post_id = $existing_posts[$index]->ID;
+				} else {
+					$post_id = wp_insert_post( array(
+						'post_title'  => (isset($p['villagerName']) ? $p['villagerName'] : 'Unknown') . "'s Passport",
+						'post_type'   => 'nook_passport',
+						'post_status' => 'publish',
+						'post_author' => $user_id
+					) );
+				}
+
+				if ( ! is_wp_error( $post_id ) ) {
+					$p['id'] = $post_id;
+					foreach ( $p as $k => $v ) {
+						update_post_meta( $post_id, '_nook_passport_' . sanitize_key( $k ), $v );
+					}
+				}
 			}
 			unset($p);
-			update_user_meta( $user_id, '_dodo_air_passports', $passports );
 			
-			// Update single passport for backwards compatibility (the active one)
 			$active_index = isset($params['activePassportIndex']) ? (int)$params['activePassportIndex'] : 0;
-			if ( isset($passports[$active_index]) ) {
-				update_user_meta( $user_id, '_dodo_air_passport', $passports[$active_index] );
-				$params = $passports[$active_index]; // for the response
-			}
-			
-			delete_transient( 'dodo_air_dynamic_profiles_v2' );
+			$params = isset($passports[$active_index]) ? $passports[$active_index] : (isset($passports[0]) ? $passports[0] : array());
+
+			delete_transient( 'dodo_air_dynamic_profiles_v3' );
 			return new WP_REST_Response( array( 'success' => true, 'passports' => $passports, 'passport' => $params ), 200 );
 		}
 
@@ -617,21 +651,47 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 			$params['flightNumber'] = $this->generate_flight_number();
 		}
 
-		$existing = get_user_meta( $user_id, '_dodo_air_passport', true );
-		if ( is_array( $existing ) ) {
-			$params = array_merge( $existing, $params );
+		$args = array(
+			'post_type'      => 'nook_passport',
+			'author'         => $user_id,
+			'posts_per_page' => 1,
+			'post_status'    => 'publish',
+			'orderby'        => 'date',
+			'order'          => 'ASC'
+		);
+		$query = new WP_Query($args);
+		$post_id = 0;
+		if ( $query->have_posts() ) {
+			$post_id = $query->posts[0]->ID;
+			$meta = get_post_meta( $post_id );
+			foreach ( $meta as $k => $v ) {
+				if ( strpos( $k, '_nook_passport_' ) === 0 ) {
+					$clean_k = str_replace( '_nook_passport_', '', $k );
+					if (!isset($params[$clean_k])) {
+						$params[$clean_k] = maybe_unserialize( $v[0] );
+					}
+				}
+			}
+		} else {
+			$post_id = wp_insert_post( array(
+				'post_title'  => (isset($params['villagerName']) ? $params['villagerName'] : 'Unknown') . "'s Passport",
+				'post_type'   => 'nook_passport',
+				'post_status' => 'publish',
+				'post_author' => $user_id
+			) );
 		}
 
-		update_user_meta( $user_id, '_dodo_air_passport', $params );
-		
-		$passports = get_user_meta( $user_id, '_dodo_air_passports', true );
-		if ( ! is_array( $passports ) ) $passports = array( $existing ?: array() );
-		$passports[0] = $params;
-		update_user_meta( $user_id, '_dodo_air_passports', $passports );
+		if ( ! is_wp_error( $post_id ) ) {
+			$params['id'] = $post_id;
+			$params['passportIndex'] = 0;
+			foreach ( $params as $k => $v ) {
+				update_post_meta( $post_id, '_nook_passport_' . sanitize_key( $k ), $v );
+			}
+		}
 
-		delete_transient( 'dodo_air_dynamic_profiles_v2' );
+		delete_transient( 'dodo_air_dynamic_profiles_v3' );
 		
-		return new WP_REST_Response( array( 'success' => true, 'passport' => $params, 'passports' => $passports ), 200 );
+		return new WP_REST_Response( array( 'success' => true, 'passport' => $params, 'passports' => array($params) ), 200 );
 	}
 
 	public function claim_stamp( $request ) {
@@ -759,17 +819,17 @@ class Super_Nerd_Bros_Dodo_Air_REST {
 					$host_miles = (int) get_user_meta( $host_userId, '_xp_total_gp', true );
 					update_user_meta( $host_userId, '_xp_total_gp', $host_miles + $milesCost );
 				} elseif ( $host_friendCode ) {
-					$users = get_users(array(
-						'meta_key' => '_dodo_air_passport',
-						'meta_compare' => 'EXISTS'
-					));
-					foreach( $users as $u ) {
-						$p = get_user_meta( $u->ID, '_dodo_air_passport', true );
-						if ( isset($p['friendCode']) && $p['friendCode'] === $host_friendCode ) {
-							$host_miles = (int) get_user_meta( $u->ID, '_xp_total_gp', true );
-							update_user_meta( $u->ID, '_xp_total_gp', $host_miles + $milesCost );
-							break;
-						}
+					$args = array(
+						'post_type'      => 'nook_passport',
+						'meta_key'       => '_nook_passport_friendCode',
+						'meta_value'     => $host_friendCode,
+						'posts_per_page' => 1
+					);
+					$query = new WP_Query($args);
+					if ( $query->have_posts() ) {
+						$host_userId = $query->posts[0]->post_author;
+						$host_miles = (int) get_user_meta( $host_userId, '_xp_total_gp', true );
+						update_user_meta( $host_userId, '_xp_total_gp', $host_miles + $milesCost );
 					}
 				}
 			}
