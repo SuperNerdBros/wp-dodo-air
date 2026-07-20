@@ -109,9 +109,6 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 				
 				echo $dev_html;
 				exit;
-			} else {
-				echo '<p>Dodo Air Dev server is not running on port ' . $vite_port . '.</p>';
-				exit;
 			}
 		}
 
