@@ -83,7 +83,7 @@ class Super_Nerd_Bros_Dodo_Air_Public {
 		
 		// Setup Vite Dev server URL dynamically based on WP host
 		$wp_host = wp_parse_url( home_url(), PHP_URL_HOST );
-		$vite_port = '5173';
+		$vite_port = '8083';
 		$vite_url = "//" . $wp_host . ":" . $vite_port;
 
 		if ( $is_dev ) {
