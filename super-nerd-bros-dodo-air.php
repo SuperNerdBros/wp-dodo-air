@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Dodo Airlines Flight Hub
- * Description:       Standalone WordPress backend and router for the Dodo Air SvelteKit app.
+ * Description:       Real-time air traffic control, flight tracker, and passenger manifest gateway bridge for Dodo Airlines operations.
  * Version:           26.9.11
  * Author:            Hall of the Gods, Inc.
  * Text Domain:       super-nerd-bros-dodo-air
