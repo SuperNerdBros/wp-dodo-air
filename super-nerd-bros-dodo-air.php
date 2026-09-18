@@ -16,46 +16,56 @@ define( 'SUPER_NERD_BROS_DODO_AIR_VERSION', '26.9.11' );
 define( 'SUPER_NERD_BROS_DODO_AIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SUPER_NERD_BROS_DODO_AIR_URL', plugin_dir_url( __FILE__ ) );
 
-require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'admin/class-super-nerd-bros-dodo-air-admin.php';
-require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'public/class-super-nerd-bros-dodo-air-public.php';
-require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'includes/class-super-nerd-bros-dodo-air-rest.php';
-require_once SUPER_NERD_BROS_DODO_AIR_PATH . 'includes/class-super-nerd-bros-dodo-air-cpt.php';
+$required_files = array(
+    'admin/class-super-nerd-bros-dodo-air-admin.php',
+    'public/class-super-nerd-bros-dodo-air-public.php',
+    'includes/class-super-nerd-bros-dodo-air-rest.php',
+    'includes/class-super-nerd-bros-dodo-air-cpt.php',
+);
 
-function run_super_nerd_bros_dodo_air() {
-    if ( ! function_exists( 'run_xophz_nook_phone' ) ) {
-        add_action( 'admin_init', 'shutoff_super_nerd_bros_dodo_air' );
-        add_action( 'admin_notices', 'admin_notice_super_nerd_bros_dodo_air' );
-        return;
+foreach ( $required_files as $file ) {
+    $full_path = SUPER_NERD_BROS_DODO_AIR_PATH . $file;
+    if ( file_exists( $full_path ) ) {
+        require_once $full_path;
     }
-
-    $cpt = new Super_Nerd_Bros_Dodo_Air_CPT();
-    add_action( 'init', array( $cpt, 'register_post_types' ) );
-
-    $admin = new Super_Nerd_Bros_Dodo_Air_Admin( 'super-nerd-bros-dodo-air', SUPER_NERD_BROS_DODO_AIR_VERSION );
-    add_action( 'admin_menu', array( $admin, 'add_plugin_admin_menu' ) );
-    add_action( 'admin_init', array( $admin, 'register_settings' ) );
-
-    $public = new Super_Nerd_Bros_Dodo_Air_Public( 'super-nerd-bros-dodo-air', SUPER_NERD_BROS_DODO_AIR_VERSION );
-    add_action( 'init', array( $public, 'register_endpoints' ) );
-    add_filter( 'query_vars', array( $public, 'register_query_vars' ) );
-    add_action( 'template_redirect', array( $public, 'template_redirect' ) );
-
-    $rest = new Super_Nerd_Bros_Dodo_Air_REST();
-    $rest->register_routes();
-
-    add_action( 'admin_init', 'dodo_air_migrate_passports_to_nook_os' );
 }
 
-function shutoff_super_nerd_bros_dodo_air() {
-    if ( ! function_exists( 'deactivate_plugins' ) ) {
-        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+function run_super_nerd_bros_dodo_air() {
+    $has_nook_os = function_exists( 'run_xophz_nook_phone' );
+    if ( ! $has_nook_os ) {
+        add_action( 'admin_notices', 'admin_notice_super_nerd_bros_dodo_air' );
     }
-    deactivate_plugins( plugin_basename( __FILE__ ) );
+
+    if ( class_exists( 'Super_Nerd_Bros_Dodo_Air_CPT' ) ) {
+        $cpt = new Super_Nerd_Bros_Dodo_Air_CPT();
+        add_action( 'init', array( $cpt, 'register_post_types' ) );
+    }
+
+    if ( class_exists( 'Super_Nerd_Bros_Dodo_Air_Admin' ) ) {
+        $admin = new Super_Nerd_Bros_Dodo_Air_Admin( 'super-nerd-bros-dodo-air', SUPER_NERD_BROS_DODO_AIR_VERSION );
+        add_action( 'admin_menu', array( $admin, 'add_plugin_admin_menu' ) );
+        add_action( 'admin_init', array( $admin, 'register_settings' ) );
+    }
+
+    if ( class_exists( 'Super_Nerd_Bros_Dodo_Air_Public' ) ) {
+        $public = new Super_Nerd_Bros_Dodo_Air_Public( 'super-nerd-bros-dodo-air', SUPER_NERD_BROS_DODO_AIR_VERSION );
+        add_action( 'init', array( $public, 'register_endpoints' ) );
+        add_filter( 'query_vars', array( $public, 'register_query_vars' ) );
+        add_action( 'template_redirect', array( $public, 'template_redirect' ) );
+    }
+
+    if ( class_exists( 'Super_Nerd_Bros_Dodo_Air_REST' ) ) {
+        $rest = new Super_Nerd_Bros_Dodo_Air_REST();
+        $rest->register_routes();
+    }
+
+    if ( $has_nook_os ) {
+        add_action( 'admin_init', 'dodo_air_migrate_passports_to_nook_os' );
+    }
 }
 
 function admin_notice_super_nerd_bros_dodo_air() {
-    echo '<div class="error"><h2><strong>Dodo Airlines Flight Hub</strong> requires Nook OS (xophz-nook-phone) to run. It has self <strong>deactivated</strong>.</h2></div>';
-    if ( isset( $_GET['activate'] ) ) unset( $_GET['activate'] );
+    echo '<div class="notice notice-warning is-dismissible"><p><strong>Dodo Airlines Flight Hub:</strong> Nook OS (xophz-nook-phone) is not currently active. Passport integration may be limited until Nook OS is running.</p></div>';
 }
 
 function dodo_air_migrate_passports_to_nook_os() {
