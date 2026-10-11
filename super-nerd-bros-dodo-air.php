@@ -19,6 +19,7 @@ define( 'SUPER_NERD_BROS_DODO_AIR_URL', plugin_dir_url( __FILE__ ) );
 $required_files = array(
     'admin/class-super-nerd-bros-dodo-air-admin.php',
     'public/class-super-nerd-bros-dodo-air-public.php',
+    'includes/class-super-nerd-bros-dodo-air-gemini.php',
     'includes/class-super-nerd-bros-dodo-air-rest.php',
     'includes/class-super-nerd-bros-dodo-air-cpt.php',
 );
