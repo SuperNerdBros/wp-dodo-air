@@ -3,7 +3,8 @@
  * Plugin Name:       Dodo Airlines Flight Hub
  * Description:       Real-time air traffic control, flight tracker, and passenger manifest gateway bridge for Dodo Airlines operations.
  * Version:           26.10.12
- * Author:            Hall of the Gods, Inc.
+ * Author:            My Compass Consulting
+ * Author URI:        https://mycompassconsulting.com/
  * Text Domain:       super-nerd-bros-dodo-air
  */
 
