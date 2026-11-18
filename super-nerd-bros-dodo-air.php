@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Dodo Airlines Flight Hub
  * Description:       Real-time air traffic control, flight tracker, and passenger manifest gateway bridge for Dodo Airlines operations.
- * Version:           26.10.12
+ * Version:           26.11.18-274
  * Author:            My Compass Consulting
  * Author URI:        https://mycompassconsulting.com/
  * Text Domain:       super-nerd-bros-dodo-air
@@ -13,7 +13,7 @@ if ( ! defined( 'WPINC' ) ) {
 	die;
 }
 
-define( 'SUPER_NERD_BROS_DODO_AIR_VERSION', '26.10.12' );
+define( 'SUPER_NERD_BROS_DODO_AIR_VERSION', '26.11.18-274' );
 define( 'SUPER_NERD_BROS_DODO_AIR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SUPER_NERD_BROS_DODO_AIR_URL', plugin_dir_url( __FILE__ ) );
 
